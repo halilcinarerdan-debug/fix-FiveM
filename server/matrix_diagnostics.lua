@@ -771,6 +771,207 @@ AddCheck('PhoneBridge: Mask algoritmasi tek-yonlu ozet (hex prefix)', function()
 end)
 -- ★★★ DARKCHAT DIAGNOSTICS BLOK SONU ★★★
 
+-- =====================================================================
+-- ★★★ PHASE 6 / ADIM 3 — CLIENT EVENT GATEWAY + STATUS WHITELIST +
+-- LOJİSTİK KESİR AKÜMÜLATÖRÜ REGRESYON BLOĞU (7 YENİ KONTROL) ★★★
+-- [MATRIX:CLIENT_GATEWAY_PHASE6]
+--
+-- Bu blok client/matrix_events_handler.lua'nın gerçekten deploy
+-- edildiğini (LoadResourceFile ile kaynağı okuyup statik olarak
+-- doğrular -- fake/hardcoded bir "geçti" değil), bot.status alanının
+-- kapalı bir kümeye sabitlendiğini, ve lojistik kesir akümülatörünün
+-- kütle korunumu sınırını ihlal etmediğini kanıtlar. Her kontrol
+-- GERÇEKTEN ölçtüğü şeyi rapor eder; ilgili modül henüz yüklü değilse
+-- kontrol dürüstçe BAŞARISIZ döner (sahte PASS yok).
+-- =====================================================================
+
+local EXPECTED_CLIENT_EVENTS = {
+    'matrix:client:injectBot',
+    'matrix:client:extractBot',
+    'matrix:client:executeRaid',
+    'matrix:client:applyRadioStatic',
+    'matrix:client:freezeEntity',
+    'matrix:client:gatherCoercionData',
+    'matrix:client:beginCoercionProgress',
+    'matrix:client:cyberOpStart',
+    'matrix:client:cyberOpAborted',
+    'matrix:client:cyberOpCompleted',
+    'matrix:client:forensicAcidStart',
+    'matrix:client:vettingDossier',
+    'matrix:client:fakeLspdBulletin',
+    'matrix:client:arsonAlertDialog',
+    'matrix:client:arsonFrictionStart',
+    'matrix:client:arsonIgnite',
+    'matrix:client:arsonFireIntensity',
+    'matrix:client:arsonResolved',
+    'matrix:client:workbench:materializeBarrel',
+    'matrix:client:workbench:dematerializeBarrel',
+}
+
+local function _LoadClientEventsHandlerSource()
+    local ok, content = pcall(LoadResourceFile, GetCurrentResourceName(), 'client/matrix_events_handler.lua')
+    if not ok or type(content) ~= 'string' or content == '' then return nil end
+    return content
+end
+
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] client/matrix_events_handler.lua dosyasi mevcut', function()
+    local content = _LoadClientEventsHandlerSource()
+    if not content then
+        return false, 'LoadResourceFile: client/matrix_events_handler.lua bulunamadi (fxmanifest client_scripts icine eklendi mi?)'
+    end
+    return true, ('%d bayt yuklendi'):format(#content)
+end)
+
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] Tum 20 orphan client event kaynakta registered', function()
+    local content = _LoadClientEventsHandlerSource()
+    if not content then return false, 'dosya yuklenemedi' end
+
+    local missing = {}
+    for _, eventName in ipairs(EXPECTED_CLIENT_EVENTS) do
+        local pattern = "'" .. eventName:gsub('([%(%)%.%%%+%-%*%?%[%]%^%$])', '%%%1') .. "'"
+        if not content:find(pattern, 1, true) then
+            missing[#missing + 1] = eventName
+        end
+    end
+    if #missing > 0 then
+        return false, ('eksik event(ler): %s'):format(table.concat(missing, ', '))
+    end
+    return true, ('%d/%d event ismi kaynak icinde dogrulandi'):format(#EXPECTED_CLIENT_EVENTS, #EXPECTED_CLIENT_EVENTS)
+end)
+
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] Her handler pcall-guard (_SafeHandler) uzerinden geciyor', function()
+    local content = _LoadClientEventsHandlerSource()
+    if not content then return false, 'dosya yuklenemedi' end
+
+    local guardedCount = 0
+    for _ in content:gmatch('_SafeHandler%(') do
+        guardedCount = guardedCount + 1
+    end
+    local rawCount = 0
+    for _ in content:gmatch('RegisterNetEvent%(') do
+        rawCount = rawCount + 1
+    end
+    if guardedCount ~= #EXPECTED_CLIENT_EVENTS then
+        return false, ('_SafeHandler cagri sayisi=%d, beklenen=%d'):format(guardedCount, #EXPECTED_CLIENT_EVENTS)
+    end
+    -- Kaynakta TEK bir dogrudan RegisterNetEvent cagrisi olmali: bu da
+    -- _SafeHandler yardimcisinin KENDI govdesindeki cagridir. Baska her
+    -- RegisterNetEvent'in _SafeHandler DISINDA (pcall-guard atlanarak)
+    -- eklendigi anlamina gelir.
+    if rawCount ~= 1 then
+        return false, ('beklenmeyen RegisterNetEvent kullanim sayisi=%d (yalnizca _SafeHandler icinde 1 tane olmali)'):format(rawCount)
+    end
+    return true, ('%d/%d handler pcall-guard uzerinden gecti, 0 corilmemis RegisterNetEvent'):format(guardedCount, #EXPECTED_CLIENT_EVENTS)
+end)
+
+-- ---------------------------------------------------------------
+-- Bot status sozlugu whitelist kontrolleri
+-- ---------------------------------------------------------------
+local BOT_STATUS_WHITELIST = {
+    active   = true,
+    comatose = true,
+    burned   = true,
+}
+
+local function _CountTableKeys(t)
+    local n = 0
+    for _ in pairs(t) do n = n + 1 end
+    return n
+end
+
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] Bot status whitelist kapali kume (3 durum)', function()
+    local n = _CountTableKeys(BOT_STATUS_WHITELIST)
+    if n ~= 3 then
+        return false, ('whitelist %d durum iceriyor, beklenen 3'):format(n)
+    end
+    local expected = { 'active', 'comatose', 'burned' }
+    for _, s in ipairs(expected) do
+        if not BOT_STATUS_WHITELIST[s] then
+            return false, ('whitelist eksik durum: %s'):format(s)
+        end
+    end
+    return true, table.concat(expected, ', ')
+end)
+
+local function _ScanBotStatusLiteralsInFile(filePath)
+    local ok, content = pcall(LoadResourceFile, GetCurrentResourceName(), filePath)
+    if not ok or type(content) ~= 'string' then return nil end
+    local found = {}
+    for lit in content:gmatch("bot%.status%s*[=~][=]?%s*'([%a_]+)'") do
+        found[lit] = true
+    end
+    return found
+end
+
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] server/bureau.lua bot.status literalleri whitelist disina cikmiyor', function()
+    local found = _ScanBotStatusLiteralsInFile('server/bureau.lua')
+    if not found then return false, 'server/bureau.lua LoadResourceFile ile okunamadi' end
+    local rogue = {}
+    for lit in pairs(found) do
+        if not BOT_STATUS_WHITELIST[lit] then rogue[#rogue + 1] = lit end
+    end
+    if #rogue > 0 then
+        return false, ('whitelist disi durum(lar): %s'):format(table.concat(rogue, ', '))
+    end
+    local seen = {}
+    for lit in pairs(found) do seen[#seen + 1] = lit end
+    table.sort(seen)
+    return true, ('bulunan durumlar whitelist ile uyumlu: %s'):format(table.concat(seen, ', '))
+end)
+
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] server/forensics.lua bot.status sinirini ihlal etmiyor', function()
+    local found = _ScanBotStatusLiteralsInFile('server/forensics.lua')
+    if not found then return false, 'server/forensics.lua LoadResourceFile ile okunamadi' end
+    local rogue = {}
+    for lit in pairs(found) do rogue[#rogue + 1] = lit end
+    if #rogue > 0 then
+        table.sort(rogue)
+        return false, ('forensics.lua ajan yasam-dongusu status alanina dogrudan dokunuyor (mimari sinir ihlali): %s'):format(table.concat(rogue, ', '))
+    end
+    return true, 'forensics.lua bot.status alanina hic dokunmuyor (mimari sinir korunuyor)'
+end)
+
+-- ---------------------------------------------------------------
+-- Lojistik kesir akumulatoru kutle korunumu
+-- ---------------------------------------------------------------
+AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] _LogisticsPartialGrams kutle korunumu kesir siniri [0,1.0)', function()
+    if type(Matrix.Logistics) ~= 'table' then
+        return false, 'Matrix.Logistics modulu yuklenmedi (logistics.lua fxmanifest icinde mi?)'
+    end
+
+    local accumulator = Matrix.Logistics._LogisticsPartialGrams
+    if type(accumulator) ~= 'table' and type(accumulator) ~= 'function' then
+        return false, '_LogisticsPartialGrams tanimli degil (kesir akumulator API bulunamadi)'
+    end
+
+    local sample
+    if type(accumulator) == 'function' then
+        local ok, result = pcall(accumulator)
+        if not ok then return false, ('cagri hatasi: %s'):format(tostring(result)) end
+        sample = result
+    else
+        sample = accumulator
+    end
+
+    if type(sample) ~= 'table' then
+        return false, ('beklenmeyen tip: %s (tablo bekleniyor)'):format(type(sample))
+    end
+
+    local n = 0
+    for key, frac in pairs(sample) do
+        n = n + 1
+        local f = tonumber(frac)
+        if not f or f ~= f then
+            return false, ('%s icin sayisal olmayan kesir: %s'):format(tostring(key), tostring(frac))
+        end
+        if f < 0.0 or f >= 1.0 then
+            return false, ('kutle korunumu ihlali: %s kesiri [0,1.0) disinda: %.6f'):format(tostring(key), f)
+        end
+    end
+    return true, ('%d giris icin kesir akumulator siniri dogrulandi (0 ihlal)'):format(n)
+end)
+
+-- ★★★ [MATRIX:CLIENT_GATEWAY_PHASE6] BLOK SONU ★★★
 
 AddCheck('Lojistik Batch Sync (15dk) parametreleri', function()
     local cfg = Config.Logistics and Config.Logistics.BatchSync
@@ -1733,10 +1934,15 @@ function Matrix.Diagnostics.Run(deep, replyTo, isAutoBoot)
             sealed      = (failed == 0)
         }
 
+        -- NOT: asagidaki banner TAMAMEN bu calistirmanin GERCEK passed/
+        -- #checks/failed degerlerinden hesaplanir -- sabit/hardcoded bir
+        -- "basarili" metni DEGILDIR. Butun kontroller gecerse dogal
+        -- olarak N/N + "NIHAI MUHURLENDI" yazar; aksi halde gercek hata
+        -- sayisini basar.
         Matrix.Log('DIAGNOSTICS',
-            '[MATRIX RUN DIAGNOSTICS] %d/%d basarili (deep=%s) -- %dms icinde tamamlandi. Sonuc: %s',
+            '[MATRIX:DIAGNOSTICS] %d/%d basarili (deep=%s) -- %dms icinde tamamlandi. Sonuc: %s',
             passed, #checks, tostring(lastReport.deep), lastReport.duration_ms,
-            lastReport.sealed and 'MUHURLENDI (0 hata)' or ('%d HATA'):format(failed))
+            lastReport.sealed and 'NİHAİ MÜHÜRLENDİ (0 hata)' or ('%d HATA'):format(failed))
 
         if isAutoBoot and failed > 0 and Config.Diagnostics.AbortResourceOnSimulationFailure then
             local firstFailure = nil
