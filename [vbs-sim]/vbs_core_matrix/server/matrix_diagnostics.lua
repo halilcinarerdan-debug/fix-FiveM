@@ -853,8 +853,14 @@ AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] Her handler pcall-guard (_SafeHandler) 
     local content = _LoadClientEventsHandlerSource()
     if not content then return false, 'dosya yuklenemedi' end
 
+    -- ★ [FIX] "_SafeHandler%(" TEK BASINA hem 20 gercek cagriyi HEM DE
+    -- 'local function _SafeHandler(name, fn)' TANIMININ kendisini
+    -- eslesiyordu (21 = 20+1). Cagri siteleri her zaman bir string
+    -- literal ile baslar ('matrix:client:...'), tanim ise bir
+    -- identifier (name) ile -- bu yuzden aciliş tirnagini da isteyerek
+    -- yalnizca gercek cagrilar sayilir.
     local guardedCount = 0
-    for _ in content:gmatch('_SafeHandler%(') do
+    for _ in content:gmatch("_SafeHandler%('") do
         guardedCount = guardedCount + 1
     end
     local rawCount = 0
