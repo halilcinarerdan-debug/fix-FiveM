@@ -1450,6 +1450,25 @@ CREATE TABLE IF NOT EXISTS `matrix_opsec_tamper_log` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4;
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- =======================================================================
+-- ★ [FIX] PARAVAN_REAL_ESTATE_PHASE2 eksik kolonlari — server/bureau.lua
+-- Matrix.Bureau.CreateTrapHouse/LoadTrapHouses/AssignStrawBuyer/
+-- _HandleParavanSeizure bu iki kolonu ZATEN okuyup yaziyordu ama hicbir
+-- migration dosyasi (bu dosya dahil) onlari hic eklememisti --
+-- /traphouseekle calistirinca "Unknown column 'straw_buyer_citizenid'"
+-- hatasiyla cökerdi. Additive, IF NOT EXISTS.
+-- =======================================================================
+SET FOREIGN_KEY_CHECKS = 0;
+
+ALTER TABLE `matrix_trap_houses`
+    ADD COLUMN IF NOT EXISTS `straw_buyer_citizenid` VARCHAR(50) NULL
+        COMMENT 'PARAVAN_REAL_ESTATE_PHASE2: bu trap house''un tapu sahibi gorunen paravan botun handler citizenid''si',
+    ADD COLUMN IF NOT EXISTS `structural_integrity` FLOAT NOT NULL DEFAULT 1.00
+        COMMENT 'PARAVAN_REAL_ESTATE_PHASE2: 0.00 = el konuldu (paravan deceased/burned), 1.00 = saglam';
+
+SET FOREIGN_KEY_CHECKS = 1;
+
 -- =======================================================================
 -- ★ [TERRITORY POACHING] server/district_hubs.lua Matrix.DistrictHubs.
 -- PoachRivalTerritory tarafindan kullanilir. Rakip bir cete mahallesinin

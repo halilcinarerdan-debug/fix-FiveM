@@ -283,6 +283,17 @@ local OpenCanliKadroMenu
 local OpenBotActionsMenu
 local OpenMatrixNotepad
 
+-- ★ [FIX] Alt menuler (Canli Kadro/Not Defteri/Adli Islemler/Bulusma
+-- Notepad'i) geri dönüş hedefi olarak sabit 'matrix_baron_terminali'
+-- string'ini kullaniyordu, ama OpenBaronTerminaliMenu her acilista
+-- _baronMenuCounter ile ID'yi 'matrix_baron_terminali_N' yapiyordu --
+-- ikisi HICBIR ZAMAN eslesmiyordu, ox_lib "geri" hedefini bulamayinca
+-- sessizce hicbir sey yapmiyordu (kullanici ESC'ye mecbur kaliyordu).
+-- Bu dosyadaki tum menu fonksiyonlari (asagida, tanim sirasi fark
+-- etmeksizin) bu tek upvalue'yu paylasir; alt menuler artik bunu okuyup
+-- GERCEK guncel root ID'sine geri doner.
+local _currentBaronMenuId = nil
+
 -- ★ PHASE6-STEP3 forward declarations for the new dialogs
 local OpenHydraulicPressDialog
 local OpenBotanyEnvironmentDialog
@@ -791,7 +802,7 @@ OpenCanliKadroMenu = function()
     lib.registerContext({
         id = 'matrix_canli_kadro',
         title = '[CANLI KADRO]',
-        menu = 'matrix_baron_terminali',
+        menu = _currentBaronMenuId,
         options = options
     })
     lib.showContext('matrix_canli_kadro')
@@ -807,7 +818,7 @@ OpenMatrixNotepad = function()
     lib.registerContext({
         id = 'matrix_notepad',
         title = '[OPERASYON NOT DEFTERI]',
-        menu = 'matrix_baron_terminali',
+        menu = _currentBaronMenuId,
         options = options
     })
     lib.showContext('matrix_notepad')
@@ -858,7 +869,7 @@ local function OpenForensicOpsMenu()
     lib.registerContext({
         id      = 'matrix_forensic_ops',
         title   = '[ADLİ ARMAN KATMANLARI]',
-        menu    = 'matrix_baron_terminali',
+        menu    = _currentBaronMenuId,
         options = {
             { title = '[ASİTLE SİLAH TEMİZLE]', description = 'Eldeki silahın izini asitle kazır.', icon = 'flask',
               onSelect = function()
@@ -986,7 +997,7 @@ local function OpenRendezvousNotepad()
     lib.registerContext({
         id      = 'matrix_rendezvous_notepad',
         title   = '[BULUŞMA NOKTASI RAPOR DEFTERİ]',
-        menu    = 'matrix_baron_terminali',
+        menu    = _currentBaronMenuId,
         options = options
     })
     lib.showContext('matrix_rendezvous_notepad')
@@ -1006,6 +1017,7 @@ OpenBaronTerminaliMenu = function()
 
     _baronMenuCounter = _baronMenuCounter + 1
     local menuId = ('matrix_baron_terminali_%d'):format(_baronMenuCounter)
+    _currentBaronMenuId = menuId
 
     lib.registerContext({
         id    = menuId,
