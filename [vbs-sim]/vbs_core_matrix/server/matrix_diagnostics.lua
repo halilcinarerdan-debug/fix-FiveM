@@ -816,6 +816,7 @@ local EXPECTED_CLIENT_EVENTS = {
     'matrix:client:arsonResolved',
     'matrix:client:workbench:materializeBarrel',
     'matrix:client:workbench:dematerializeBarrel',
+    'matrix:client:workbench:packagingRoomStateChanged',
 }
 
 local function _LoadClientEventsHandlerSource()

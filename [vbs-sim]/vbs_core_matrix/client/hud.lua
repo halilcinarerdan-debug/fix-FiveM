@@ -9,6 +9,58 @@ local hudLines  = {}
 local NotepadEntries = {}
 local MAX_NOTEPAD_ENTRIES = 32
 
+local function AddNotepadEntry(text)
+    NotepadEntries[#NotepadEntries + 1] = { text = text }
+    while #NotepadEntries > MAX_NOTEPAD_ENTRIES do table.remove(NotepadEntries, 1) end
+end
+
+-- ★ [YENİ] Haritada (pause menu map) elle bırakılan GPS işareti otomatik
+-- olarak Not Defteri'ne koordinatla yazılır. Native bir "waypoint changed"
+-- event'i yok, bu yüzden 1sn'de bir GetFirstBlipInfoId(8) (waypoint
+-- blip sprite'ı) ile poll edilir; koordinat bir öncekinden >1.0m
+-- farklıysa yeni işaret sayılır.
+local _lastWaypointCoords = nil
+
+CreateThread(function()
+    while true do
+        Wait(1000)
+        if IsWaypointActive() then
+            local blip = GetFirstBlipInfoId(8)
+            if DoesBlipExist(blip) then
+                local coords = GetBlipCoords(blip)
+                if not _lastWaypointCoords or #(coords - _lastWaypointCoords) > 1.0 then
+                    _lastWaypointCoords = coords
+                    AddNotepadEntry(('[HARİTA İŞARETİ] %.2f, %.2f, %.2f'):format(coords.x, coords.y, coords.z))
+                    if lib and lib.notify then
+                        lib.notify({ title = '[NOT DEFTERİ]', description = 'Harita işareti not defterine eklendi.', type = 'inform' })
+                    end
+                end
+            end
+        else
+            _lastWaypointCoords = nil
+        end
+    end
+end)
+
+-- ★ [YENİ] /coords artık client-side: koordinatı hem chat'e basar hem de
+-- Not Defteri'ne ekler (haritadaki işaretlerle AYNI mekanizma). Eski
+-- server/main.lua'daki /coords kaldırıldı -- ayni isimle client-side
+-- kayıtlı bir komut varsa chat girdisini SUNUCUYA HİÇ İLETMEZ, o yüzden
+-- iki tarafta birden tutmak yalnızca kafa karıştırırdı.
+RegisterCommand('coords', function()
+    local ped = PlayerPedId()
+    local c   = GetEntityCoords(ped)
+    local hd  = GetEntityHeading(ped)
+
+    TriggerEvent('chat:addMessage', { args = { '[COORDS]', ('KOMUTLAR ICIN (boslukla): %.3f %.3f %.3f  |Heading:%.1f'):format(c.x, c.y, c.z, hd) } })
+    TriggerEvent('chat:addMessage', { args = { '[COORDS]', ('CONFIG ICIN (virgullu):  vector3(%.3f, %.3f, %.3f)'):format(c.x, c.y, c.z) } })
+
+    AddNotepadEntry(('[/coords] %.3f, %.3f, %.3f (heading %.1f)'):format(c.x, c.y, c.z, hd))
+    if lib and lib.notify then
+        lib.notify({ title = '[NOT DEFTERİ]', description = 'Koordinat not defterine eklendi.', type = 'inform' })
+    end
+end, false)
+
 local COLOR_HEADER = { 235, 235, 235 }
 local COLOR_VALUE  = { 110, 255, 140 }
 local COLOR_DIM    = { 90, 140, 100 }
@@ -1058,10 +1110,9 @@ end
 RegisterNetEvent('matrix:client:rendezvousAssigned', function(payload)
     if type(payload) ~= 'table' or type(payload.coords) ~= 'vector3' then return end
     SetNewWaypoint(payload.coords.x, payload.coords.y)
-    NotepadEntries[#NotepadEntries + 1] = {
-        text = ('[BULUSMA #%s] %s — Waypoint ayarlandi.'):format(tostring(payload.handoff_id or '?'), tostring(payload.label or 'Karaborsa Teslimati'))
-    }
-    while #NotepadEntries > MAX_NOTEPAD_ENTRIES do table.remove(NotepadEntries, 1) end
+    AddNotepadEntry(('[BULUSMA #%s] %s — Waypoint ayarlandi (%.2f, %.2f, %.2f).'):format(
+        tostring(payload.handoff_id or '?'), tostring(payload.label or 'Karaborsa Teslimati'),
+        payload.coords.x, payload.coords.y, payload.coords.z))
     if lib and lib.notify then
         lib.notify({ title = '[RENDEZVOUS]', description = 'Bulusma noktasi ayarlandi.', type = 'inform' })
     end

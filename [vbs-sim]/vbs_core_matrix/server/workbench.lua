@@ -710,6 +710,11 @@ function Matrix.Workbench.TogglePackagingRoom(src, trapHouseId, forceState)
 
     _togglingRoom[trapHouseId] = nil
 
+    -- ★ [YENİ] Trap house bucket'ındaki herkese hint: paketleme odası
+    -- başlatıldı/durduruldu. materializeBarrel/dematerializeBarrel ile
+    -- AYNI BroadcastToBucket deseni.
+    BroadcastToBucket(trapHouseId, 'matrix:client:workbench:packagingRoomStateChanged', newState)
+
     Matrix.Log('WORKBENCH', '[PAKETLEME ODASI] Trap #%d -> %s (%d bot etkilendi, tetikleyen:%s)',
         trapHouseId, newState and 'BASATILDI' or 'DURDURULDU', affected, tostring(state and state.citizenid))
 

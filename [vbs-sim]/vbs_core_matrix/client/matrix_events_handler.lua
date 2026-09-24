@@ -692,6 +692,25 @@ end
 _SafeHandler('matrix:client:workbench:dematerializeBarrel', _OnDematerializeBarrel)
 
 -- =====================================================================
+-- [11] PAKETLEME ODASI HINT'I (GROUNDED) —
+-- matrix:client:workbench:packagingRoomStateChanged
+-- server/workbench.lua Matrix.Workbench.TogglePackagingRoom:
+--   BroadcastToBucket(trapHouseId, 'matrix:client:workbench:packagingRoomStateChanged', newState)
+-- Ayni bucket'taki (trap house icindeki) HERKESE gider.
+-- =====================================================================
+local function _OnPackagingRoomStateChanged(newState)
+    if lib and lib.notify then
+        lib.notify({
+            title       = '[PAKETLEME ODASI]',
+            description = newState and 'Paketleme odası başlatıldı.' or 'Paketleme odası durduruldu.',
+            type        = newState and 'success' or 'inform'
+        })
+    end
+    _Log('workbench:packagingRoomStateChanged: yeni durum=%s', tostring(newState))
+end
+_SafeHandler('matrix:client:workbench:packagingRoomStateChanged', _OnPackagingRoomStateChanged)
+
+-- =====================================================================
 -- KAYNAK DURDURMA TEMİZLİĞİ
 -- =====================================================================
 AddEventHandler('onClientResourceStop', function(resourceName)

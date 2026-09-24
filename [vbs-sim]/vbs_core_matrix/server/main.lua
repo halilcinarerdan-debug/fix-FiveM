@@ -1819,14 +1819,10 @@ local function ResolveBotOrigin(bot, dispatcherSrc)
     return nil
 end
 
-RegisterCommand('coords', function(src)
-    local ped = GetPlayerPed(src)
-    if not ped or ped == 0 then Reply(src, 'Ped bulunamadi.'); return end
-    local c  = GetEntityCoords(ped)
-    local hd = GetEntityHeading(ped)
-    Reply(src, ('KOMUTLAR ICIN (boslukla): %.3f %.3f %.3f  |Heading:%.1f'):format(c.x, c.y, c.z, hd))
-    Reply(src, ('CONFIG ICIN (virgullu):  vector3(%.3f, %.3f, %.3f)'):format(c.x, c.y, c.z))
-end, false)
+-- ★ /coords artik client/hud.lua'da (bkz. AddNotepadEntry) -- koordinati
+-- hem chat'e basar hem Not Defteri'ne ekler. Ayni isimle client-side
+-- kayitli bir komut chat girdisini sunucuya hic iletmediginden, burada
+-- tutmak dead code olurdu.
 
 RegisterCommand('botyarat', function(src, args)
     local name = args[1]
