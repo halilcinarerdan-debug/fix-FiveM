@@ -1,0 +1,54 @@
+fx_version 'cerulean'
+game 'gta5'
+lua54 'yes'
+
+author 'projeFivem'
+description 'vbs_core_matrix - Katman 1-8 Birlesik Motor'
+version '1.7.0'
+
+shared_scripts {
+    '@ox_lib/init.lua',
+    'shared/config.lua',
+    'shared/crypto.lua'
+}
+
+client_scripts {
+    'client/hud.lua',
+    'client/trap_house_client.lua',
+    'client/composer_intro.lua',
+    'client/mercenary_followers.lua',
+    'client/humint_stalking.lua',
+    'client/anti_glitch.lua',
+    'client/matrix_events_handler.lua'
+}
+
+server_scripts {
+    '@oxmysql/lib/MySQL.lua',
+    'server/main.lua',
+    'server/forensics.lua',
+    'server/bureau.lua',
+    'server/district_hubs.lua',
+    'server/kitchen.lua',
+    'server/logistics.lua',
+    'server/blackmarket.lua',
+    'server/door_reinforcement.lua',
+    'server/gang_hoods.lua',
+    'server/hitsquad.lua',
+    'server/phone_bridge.lua',
+    'server/matrix_diagnostics.lua',
+    'server/cognition_core.lua'
+}
+
+files {
+    'sounds/*.ogg'
+}
+
+dependencies {
+    'ox_lib',
+    'qbx_core',
+    'oxmysql',
+    'ox_inventory',
+    'ox_target',
+    'xsound',
+    'bob74_ipl'
+}

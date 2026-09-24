@@ -25,10 +25,12 @@
 --     %100 korunur — eski kodun ORİJİNAL ilk değeri de 1.0'dı).
 -- =====================================================================
 
+
 Matrix.Bureau     = Matrix.Bureau     or {}
 Matrix.TrapHouses = Matrix.TrapHouses or {}
 Matrix.Supplier   = Matrix.Supplier   or {}
 Matrix.Bureau.DropForensics = Matrix.Bureau.DropForensics or {}
+
 
 local pairs, ipairs, next        = pairs, ipairs, next
 local type, tostring, tonumber   = type, tostring, tonumber
@@ -41,20 +43,25 @@ local os_time                    = os.time
 local GetPlayerPed               = GetPlayerPed
 local GetEntityCoords            = GetEntityCoords
 
+
 local propagandaMomentum = 0.0
 local cyberLeakHeatmap   = {}
 local patternLog         = {}
+
 
 local dirtyDecryption = {}
 local dirtyIntel      = {}
 local dirtyPatternLog  = {}
 local patternLogFlushed = {}
 
+
 local RaidLogIdByTrapHouse = {}
 local LivestreamSessions   = {}
 
+
 local DropForensicsByDropId = Matrix.Bureau.DropForensics
 local WARNED_MISSING_SUPPLIER_HOOK = false
+
 
 -- =====================================================================
 -- UTILITIES
@@ -72,6 +79,7 @@ local function VectorDistance(a, b)
     return #(a - b)
 end
 
+
 local function IsValidCoords(c)
     if type(c) ~= 'table' and type(c) ~= 'userdata' and type(c) ~= 'vector3' and type(c) ~= 'vector4' then return false end
     if c.x == nil or c.y == nil or c.z == nil then return false end
@@ -79,6 +87,7 @@ local function IsValidCoords(c)
     if c.x ~= c.x or c.y ~= c.y or c.z ~= c.z then return false end
     return true
 end
+
 
 -- =====================================================================
 -- LOAD
@@ -102,13 +111,16 @@ function Matrix.Bureau.LoadTrapHouses()
     Matrix.Log('BUREAU', '%d trap house yüklendi.', #rows)
 end
 
+
 CreateThread(function()
     Matrix.Bureau.LoadTrapHouses()
 end)
 
+
 function Matrix.Bureau.CreateTrapHouse(label, coords)
     if not IsValidCoords(coords) then return false, 'bad_coords' end
     label = (type(label) == 'string' and label ~= '') and label or 'Yeni Trap'
+
 
    MySQL.insert([[
         INSERT INTO matrix_trap_houses
@@ -128,8 +140,10 @@ function Matrix.Bureau.CreateTrapHouse(label, coords)
         Matrix.Log('BUREAU', 'Yeni trap house #%d (%s) oluşturuldu.', insertId, label)
     end)
 
+
     return true
 end
+
 
 -- =====================================================================
 -- FIND NEAREST
@@ -143,6 +157,7 @@ local function FindNearestTrapHouse(coords)
     return nearestId, nearestDist
 end
 
+
 -- =====================================================================
 -- PATTERN LOG (cache + async upsert)
 -- =====================================================================
@@ -150,11 +165,14 @@ function Matrix.Bureau.LogPatternEvent(trapHouseId)
     if type(trapHouseId) ~= 'number' or not Matrix.TrapHouses[trapHouseId] then return false end
     if not patternLog[trapHouseId] then patternLog[trapHouseId] = {} end
 
+
     local dt = os_date('*t')
     local key = ('%d_%d'):format(dt.wday, dt.hour)
     patternLog[trapHouseId][key] = (patternLog[trapHouseId][key] or 0) + 1
 
+
    dirtyPatternLog[trapHouseId] = true
+
 
     -- ★ [FAZ 2] Temiz döngü → dark lawyer fragment
     if Matrix.Bureau.IncrementDarkLawyerFragment then
@@ -162,6 +180,7 @@ function Matrix.Bureau.LogPatternEvent(trapHouseId)
     end
     return true
 end
+
 
 function Matrix.Bureau.FlushDirtyPatternLog()
     local queries = {}
@@ -195,7 +214,9 @@ function Matrix.Bureau.FlushDirtyPatternLog()
         dirtyPatternLog[trapHouseId] = nil
     end
 
+
     if #queries == 0 then return end
+
 
     local ok, err = pcall(function() return MySQL.transaction.await(queries) end)
     if not ok or err == false then
@@ -203,9 +224,11 @@ function Matrix.Bureau.FlushDirtyPatternLog()
     end
 end
 
+
 local function ComputePatternRegularity(trapHouseId)
     local buckets = patternLog[trapHouseId]
     if not buckets then return 0.0 end
+
 
     local total, maxBucket = 0, 0
     for _, count in pairs(buckets) do
@@ -216,6 +239,7 @@ local function ComputePatternRegularity(trapHouseId)
     return maxBucket / total
 end
 
+
 -- =====================================================================
 -- DECRYPTION (dirty-set)
 -- =====================================================================
@@ -223,18 +247,23 @@ function Matrix.Bureau.AdvanceDecryption(trapHouseId, amount)
     local house = Matrix.TrapHouses[trapHouseId]
     if not house then return end
 
+
     amount = tonumber(amount) or 0.0
     if amount ~= amount then amount = 0.0 end
 
+
     amount = amount * Matrix.Bureau.GetBureaucraticVelocity()
+
 
     house.decryption_confidence = Matrix.Clamp(house.decryption_confidence + amount, 0.0, 1.0)
     dirtyDecryption[trapHouseId] = true
+
 
     if house.decryption_confidence >= Config.Bureau.RaidDecryptionThreshold and not house.raid_ordered then
         Matrix.Bureau.IssueRaid(trapHouseId)
     end
 end
+
 
 function Matrix.Bureau.FlushDirtyDecryption()
     local queries = {}
@@ -255,13 +284,16 @@ function Matrix.Bureau.FlushDirtyDecryption()
     end
 end
 
+
 -- =====================================================================
 -- COMMS TRIANGULATION (IDW)
 -- =====================================================================
 function Matrix.Bureau.OnUnencryptedComms(actorRef, coords)
     if not IsValidCoords(coords) then return nil end
 
+
     local actor = Matrix.ResolveActor(actorRef)
+
 
     local hitTowers = {}
     for _, tower in ipairs(Config.Bureau.CellTowers) do
@@ -270,6 +302,7 @@ function Matrix.Bureau.OnUnencryptedComms(actorRef, coords)
         end
     end
     if #hitTowers == 0 then return nil end
+
 
     local sumX, sumY, sumZ, sumWeight = 0.0, 0.0, 0.0, 0.0
     for _, tower in ipairs(hitTowers) do
@@ -282,19 +315,24 @@ function Matrix.Bureau.OnUnencryptedComms(actorRef, coords)
     end
     if sumWeight <= 0.0 then return nil end
 
+
     local estimate = vector3(sumX / sumWeight, sumY / sumWeight, sumZ / sumWeight)
     local narrowedRadius = Config.Bureau.BaseSearchRadius / #hitTowers
+
 
     local trapHouseId, distToTrap = FindNearestTrapHouse(estimate)
     if not trapHouseId or distToTrap > narrowedRadius then
         return { estimate = estimate, radius = narrowedRadius }
     end
 
+
     Matrix.Bureau.LogPatternEvent(trapHouseId)
+
 
     if Matrix.Bureau.RecordRadioBreach then
         Matrix.Bureau.RecordRadioBreach(trapHouseId)
     end
+
 
     local heat = cyberLeakHeatmap[trapHouseId] or 0.0
     local normRadius = math_max(narrowedRadius / Config.Bureau.BaseSearchRadius, 0.01)
@@ -303,17 +341,21 @@ function Matrix.Bureau.OnUnencryptedComms(actorRef, coords)
                  / #hitTowers
     gain = Matrix.Clamp(gain, 0.0, 0.5)
 
+
     Matrix.Bureau.AdvanceDecryption(trapHouseId, gain)
         -- ★ [FAZ 2] Dark Lawyer fragment akümülatörü
     if Matrix.Bureau.IncrementDarkLawyerFragment then
         pcall(Matrix.Bureau.IncrementDarkLawyerFragment, trapHouseId)
     end
 
+
     Matrix.Log('BUREAU', 'Üçgenleme (%s): %d istasyon, r=%.1fm, trap #%d kazanç=%.4f',
         (actor and actor.dna_id) or 'UNKNOWN', #hitTowers, narrowedRadius, trapHouseId, gain)
 
+
     return { estimate = estimate, radius = narrowedRadius, trap_house_id = trapHouseId, gain = gain }
 end
+
 
 -- =====================================================================
 -- PROPAGANDA
@@ -321,11 +363,13 @@ end
 function Matrix.Bureau.TriggerPropaganda(trapHouseId)
     if type(trapHouseId) ~= 'number' or not Matrix.TrapHouses[trapHouseId] then return 0.0, 0.0 end
 
+
     propagandaMomentum = math_min(
         (propagandaMomentum * Config.Bureau.PropagandaGeometricFactor)
             + Config.Bureau.PropagandaMomentumIncrement,
         Config.Bureau.PropagandaMaxMomentum
     )
+
 
     local currentHeat = cyberLeakHeatmap[trapHouseId] or 0.0
     currentHeat = math_min(
@@ -336,19 +380,24 @@ function Matrix.Bureau.TriggerPropaganda(trapHouseId)
     cyberLeakHeatmap[trapHouseId] = currentHeat
     dirtyIntel[trapHouseId]       = true
 
+
     Matrix.Log('BUREAU', 'Propaganda: momentum=%.2f, trap #%d heat=%.2f',
         propagandaMomentum, trapHouseId, currentHeat)
 
+
     return propagandaMomentum, currentHeat
 end
+
 
 function Matrix.Bureau.GetPropagandaMomentum()
     return propagandaMomentum
 end
 
+
 function Matrix.Bureau.SetHeat(trapHouseId, newHeat)
     trapHouseId = tonumber(trapHouseId)
     if not trapHouseId then return false end
+
 
     newHeat = Matrix.Clamp(
         tonumber(newHeat) or 0.0,
@@ -356,17 +405,35 @@ function Matrix.Bureau.SetHeat(trapHouseId, newHeat)
         (Config.Bureau and Config.Bureau.CyberLeakMaxIntensity) or 5.0
     )
 
+
     -- RAM güncellemesi
     cyberLeakHeatmap[trapHouseId] = newHeat
     dirtyIntel[trapHouseId]       = true
+
 
     -- matrix_bureau_intel tablosuna yansıt (kalıcılık) — FlushDirtyIntel
     -- zaten 'cyber_leak' kategorisiyle yazıyor, ek kuyruk yok.
     return true
 end
 
+
 exports('SetHeat', function(trapHouseId, newHeat)
     return Matrix.Bureau.SetHeat(trapHouseId, newHeat)
+end)
+
+-- ★ [VETTING AUDIT FIX] Config.lua, debug_map.lua, hitsquad.lua ve main.lua
+-- Matrix.Bureau.GetHeat'i mevcut bir salt-okunur getter olarak varsayıp
+-- cagiriyordu (hepsi guard'li: 'Matrix.Bureau.GetHeat and ...'), ama bu
+-- dosyada hicbir zaman tanimlanmamisti -- her cagri sessizce 0.0'a
+-- dusuyordu. SetHeat/__SetHeatRaw ile simetrik salt-okunur getter.
+function Matrix.Bureau.GetHeat(trapHouseId)
+    trapHouseId = tonumber(trapHouseId)
+    if not trapHouseId then return 0.0 end
+    return cyberLeakHeatmap[trapHouseId] or 0.0
+end
+
+exports('GetHeat', function(trapHouseId)
+    return Matrix.Bureau.GetHeat(trapHouseId)
 end)
 
 -- ★ [FAZ 2] Hitsquad counter-sting için heatmap zorlama köprüsü.
@@ -378,6 +445,7 @@ function Matrix.Bureau.__SetHeatRaw(trapHouseId, value)
     dirtyIntel[trapHouseId] = true
 end
 
+
 -- =====================================================================
 -- TICK
 -- =====================================================================
@@ -388,12 +456,14 @@ function Matrix.Bureau.Tick()
             local heat       = cyberLeakHeatmap[trapHouseId] or 0.0
             local gain       = Config.Bureau.PatternAnalysisGain * regularity * (1.0 + heat)
 
+
             if gain > 0.0 then
                 Matrix.Bureau.AdvanceDecryption(trapHouseId, gain)
             end
         end
     end
 end
+
 
 -- =====================================================================
 -- RAID
@@ -403,8 +473,10 @@ local function ComputeRaidSquad(trapHouseId, house)
     local squadSize = math_floor(Config.Bureau.RaidBaseSquadSize + (heat * Config.Bureau.RaidHeatSquadFactor) + 0.5)
     squadSize = math_max(Config.Bureau.RaidBaseSquadSize, math_min(squadSize, Config.Bureau.RaidMaxSquadSize))
 
+
     local breachMethod = (house.decryption_confidence >= Config.Bureau.RaidExplosiveBreachThreshold)
         and 'explosive' or 'ram'
+
 
     local escapeWindow = Config.Bureau.RaidBaseEscapeWindowSeconds
     for _, zone in ipairs(Config.Logistics.DeadZones) do
@@ -414,6 +486,7 @@ local function ComputeRaidSquad(trapHouseId, house)
         end
     end
 
+
     if Matrix.DoorReinforcement and Matrix.DoorReinforcement.GetBreachDelaySeconds then
         local ok, bonus = pcall(Matrix.DoorReinforcement.GetBreachDelaySeconds, trapHouseId)
         if ok and type(bonus) == 'number' and bonus == bonus and bonus > 0.0 then
@@ -421,22 +494,27 @@ local function ComputeRaidSquad(trapHouseId, house)
         end
     end
 
+
     return squadSize, breachMethod, escapeWindow
 end
+
 
 function Matrix.Bureau.IssueRaid(trapHouseId)
     local house = Matrix.TrapHouses[trapHouseId]
     if not house then return end
     if house.raid_ordered then return end
 
+
     local decryptionAtRaid = house.decryption_confidence
     local squadSize, breachMethod, escapeWindow = ComputeRaidSquad(trapHouseId, house)
+
 
     house.raid_ordered          = true
     house.decryption_confidence = Config.Bureau.PostRaidDecryptionReset
     cyberLeakHeatmap[trapHouseId] = (cyberLeakHeatmap[trapHouseId] or 0.0) * Config.Bureau.PostRaidHeatmapDecay
     patternLog[trapHouseId]     = {}
     patternLogFlushed[trapHouseId] = nil
+
 
     MySQL.prepare([[
         UPDATE matrix_trap_houses
@@ -449,6 +527,7 @@ function Matrix.Bureau.IssueRaid(trapHouseId)
         trapHouseId
     })
 
+
     MySQL.insert([[
         INSERT INTO matrix_raid_log (
             trap_house_id, squad_size, breach_method, decryption_confidence_at_raid,
@@ -459,40 +538,51 @@ function Matrix.Bureau.IssueRaid(trapHouseId)
         if insertId then RaidLogIdByTrapHouse[trapHouseId] = insertId end
     end)
 
+
     TriggerClientEvent('matrix:client:executeRaid', -1, trapHouseId, house.coords, {
         squad_size    = squadSize,
         breach_method = breachMethod,
         escape_window = escapeWindow
     })
 
+
     TriggerEvent('matrix:internal:raidIssued', trapHouseId, escapeWindow, breachMethod, squadSize)
+
 
     if Matrix.Bureau.RecordPurityIntercepted then
         Matrix.Bureau.RecordPurityIntercepted(trapHouseId)
     end
 
+
     Matrix.Log('BUREAU', '[ŞAFAK BASKINI] Trap house #%d (%s): %d birim, breach=%s, kaçış=%ds.',
         trapHouseId, house.label, squadSize, breachMethod, escapeWindow)
 end
 
+
 local VALID_RAID_OUTCOMES = { captured = true, escaped = true, eliminated = true }
+
 
 function Matrix.Bureau.ResolveRaidOutcome(trapHouseId, outcome)
     if not VALID_RAID_OUTCOMES[outcome] then return false end
     local logId = RaidLogIdByTrapHouse[trapHouseId]
     if not logId then return false end
 
+
     MySQL.prepare('UPDATE matrix_raid_log SET outcome = ?, resolved_at = NOW() WHERE id = ?', { outcome, logId })
 
+
     TriggerEvent('matrix:internal:raidResolved', trapHouseId, outcome)
+
 
     Matrix.Log('BUREAU', 'Baskın (kayıt #%d, trap #%d) sonuçlandı: %s', logId, trapHouseId, outcome)
     return true
 end
 
+
 function Matrix.Bureau.ReceiveSnitchLeak(trapHouseId)
     local house = Matrix.TrapHouses[trapHouseId]
     if not house then return end
+
 
     local target = Config.Bureau.RaidDecryptionThreshold + 0.05
     if house.decryption_confidence < target then
@@ -500,10 +590,12 @@ function Matrix.Bureau.ReceiveSnitchLeak(trapHouseId)
     end
     dirtyDecryption[trapHouseId] = true
 
+
     if Matrix.Bureau.RecordRadioBreach then
         Matrix.Bureau.RecordRadioBreach(trapHouseId)
     end
 end
+
 
 -- =====================================================================
 -- FLUSH LOOP
@@ -518,12 +610,14 @@ CreateThread(function()
     end
 end)
 
+
 -- =====================================================================
 -- LİVESTREAM
 -- =====================================================================
 function Matrix.Bureau.StartLivestream(src)
     if type(src) ~= 'number' or src <= 0 then return false end
     if LivestreamSessions[src] then return false end
+
 
     local searchOk, phoneCount = pcall(function()
         return exports['ox_inventory']:Search(src, 'count', 'burner_phone')
@@ -532,6 +626,7 @@ function Matrix.Bureau.StartLivestream(src)
         Matrix.Log('BUREAU', '[YAYIN REDDEDILDI] src=%s ustunde aktif burner_phone yok.', tostring(src))
         return false
     end
+
 
     local state = Matrix.GetOrCreatePlayerState(src)
     LivestreamSessions[src] = {
@@ -545,11 +640,13 @@ function Matrix.Bureau.StartLivestream(src)
     return true
 end
 
+
 function Matrix.Bureau.StopLivestream(src)
     if type(src) ~= 'number' or src <= 0 then return false end
     local session = LivestreamSessions[src]
     if not session then return false end
     LivestreamSessions[src] = nil
+
 
     local duration = Matrix.Now() - session.started
     MySQL.prepare([[
@@ -557,18 +654,22 @@ function Matrix.Bureau.StopLivestream(src)
         VALUES (?, ?, ?, ?, ?, NOW())
     ]], { session.citizenid, duration, session.hype, session.heat_added, session.trap_house_id })
 
+
     Matrix.Log('BUREAU', '[CANLI YAYIN BİTTİ] src=%d, süre=%ds, son hype=%.2f, eklenen heat=%.2f',
         src, duration, session.hype, session.heat_added)
     return true
 end
 
+
 RegisterNetEvent('matrix:server:reportLivestreamStart', function()
     Matrix.Bureau.StartLivestream(source)
 end)
 
+
 RegisterNetEvent('matrix:server:reportLivestreamStop', function()
     Matrix.Bureau.StopLivestream(source)
 end)
+
 
 -- =====================================================================
 -- ★ [SELF-HEALING FIX] cyberSkill RESOLUTION
@@ -591,9 +692,11 @@ local function ResolveLivestreamCyberSkill(trapHouseId)
         return 1.0
     end
 
+
     local resolved = 1.0
     local botIter = Matrix.Bots
     if type(botIter) ~= 'table' then return resolved end
+
 
     for _, bot in pairs(botIter) do
         if bot and bot.state and bot.state.trap_house_id == trapHouseId then
@@ -609,12 +712,14 @@ local function ResolveLivestreamCyberSkill(trapHouseId)
         end
     end
 
+
     if type(resolved) ~= 'number' or resolved ~= resolved
         or resolved == math.huge or resolved == -math.huge then
         resolved = 1.0
     end
     return resolved
 end
+
 
 CreateThread(function()
     while true do
@@ -625,6 +730,7 @@ CreateThread(function()
                 return exports['ox_inventory']:Search(src, 'count', 'burner_phone')
             end)
             local hasBurnerPhone = searchOk and (tonumber(phoneCount) or 0) > 0
+
 
             if not ped or ped == 0 then
                 LivestreamSessions[src] = nil
@@ -638,23 +744,28 @@ CreateThread(function()
                     Config.Bureau.PropagandaMaxMomentum
                 )
 
+
                 propagandaMomentum = math_min(
                     (propagandaMomentum * Config.Bureau.PropagandaGeometricFactor) + Config.Bureau.PropagandaMomentumIncrement,
                     Config.Bureau.PropagandaMaxMomentum
                 )
+
 
                 local coords = GetEntityCoords(ped)
                 local trapHouseId, dist = FindNearestTrapHouse(coords)
                 if trapHouseId and dist <= Config.Bureau.BaseSearchRadius then
                     session.trap_house_id = trapHouseId
 
+
                     local silent = Matrix.RadioSilence and Matrix.RadioSilence.IsActive
                         and Matrix.RadioSilence.IsActive(session.citizenid)
+
 
                     if not silent then
                         -- ★ SELF-HEALING FIX: cyberSkill artık nil/NaN OLAMAZ.
                         local cyberSkill = ResolveLivestreamCyberSkill(trapHouseId)
                         cyberSkill = math_max(cyberSkill, 0.1)
+
 
                         local heatGain = Config.Bureau.LivestreamHeatIncrementPerTick * cyberSkill
                         cyberLeakHeatmap[trapHouseId] = math_min(
@@ -664,7 +775,9 @@ CreateThread(function()
                         dirtyIntel[trapHouseId] = true
                         session.heat_added = session.heat_added + heatGain
 
+
                         Matrix.Bureau.AdvanceDecryption(trapHouseId, Config.Bureau.LivestreamDecryptionGainPerTick * cyberSkill)
+
 
                         Matrix.Bureau.RecordLivestreamRadioLeak(trapHouseId, Config.Bureau.LivestreamRadioBreachMultiplier)
                     end
@@ -673,6 +786,7 @@ CreateThread(function()
         end
     end
 end)
+
 
 -- =====================================================================
 -- REVİZYON #2: DEAD DROP ADLİ ÖRNEK TOPLAYICI
@@ -683,9 +797,11 @@ local function CfgBureau(key, default)
     return v
 end
 
+
 local function NowEpoch()
     return os_time()
 end
+
 
 function Matrix.Bureau.OnDeadDropForensicPickup(dropId, quality, supplierId, citizenid)
     dropId     = tonumber(dropId)
@@ -694,6 +810,7 @@ function Matrix.Bureau.OnDeadDropForensicPickup(dropId, quality, supplierId, cit
     if not dropId or not supplierId then return false end
     if quality ~= quality then quality = 0.0 end
     quality = Matrix.Clamp(quality, 0.0, 1.0)
+
 
     local rec = DropForensicsByDropId[dropId]
     if not rec then
@@ -707,6 +824,7 @@ function Matrix.Bureau.OnDeadDropForensicPickup(dropId, quality, supplierId, cit
         DropForensicsByDropId[dropId] = rec
     end
 
+
     local maxSamples = CfgBureau('MaxDropSamplesForLeak', 8)
     rec.samples[#rec.samples + 1] = { quality = quality, at = NowEpoch() }
     while #rec.samples > maxSamples do
@@ -714,15 +832,18 @@ function Matrix.Bureau.OnDeadDropForensicPickup(dropId, quality, supplierId, cit
     end
     rec.last_activity_at = NowEpoch()
 
+
     Matrix.Log('BUREAU',
         '[ADLİ ÖRNEK] Drop #%d, kalite=%.3f (toplam örnek: %d, toptancı #%d)',
         dropId, quality, #rec.samples, rec.supplier_id)
     return true
 end
 
+
 local function ComputeDropForensicCertainty(dropId, rec)
     rec = rec or DropForensicsByDropId[dropId]
     if not rec or #rec.samples == 0 then return 0.0, 0.0, 0 end
+
 
     local decayRate  = CfgBureau('SampleDecayRate', 0.002)
     local now        = NowEpoch()
@@ -734,6 +855,7 @@ local function ComputeDropForensicCertainty(dropId, rec)
         wSum = wSum + w
     end
     if wSum <= 0.0 then return 0.0, 0.0, #rec.samples end
+
 
     local avgQ        = qSum / wSum
     local required    = CfgBureau('RequiredSamplesForLeak', 3)
@@ -756,6 +878,7 @@ local function ComputeDropForensicCertainty(dropId, rec)
     return certainty, avgQ, #rec.samples
 end
 
+
 local function EmitSupplierIntelLeak(citizenid, supplierId, certainty, dropId)
     local threshold  = CfgBureau('BureauLeakCertaintyThreshold', 0.65)
     local basePen    = CfgBureau('BureauLeakTrustPenaltyBase', 0.15)
@@ -763,6 +886,7 @@ local function EmitSupplierIntelLeak(citizenid, supplierId, certainty, dropId)
     local span       = math_max(1.0 - threshold, 0.001)
     local norm       = Matrix.Clamp((certainty - threshold) / span, 0.0, 1.0)
     local penalty    = basePen + (maxPen - basePen) * norm
+
 
     if Matrix.Supplier and Matrix.Supplier.ApplyBureauIntelLeak then
         pcall(Matrix.Supplier.ApplyBureauIntelLeak, citizenid, supplierId, penalty, dropId)
@@ -777,6 +901,7 @@ local function EmitSupplierIntelLeak(citizenid, supplierId, certainty, dropId)
                 updated_at     = NOW()
         ]], { citizenid, supplierId, penalty })
 
+
         if not WARNED_MISSING_SUPPLIER_HOOK then
             WARNED_MISSING_SUPPLIER_HOOK = true
             Matrix.Log('BUREAU',
@@ -784,17 +909,21 @@ local function EmitSupplierIntelLeak(citizenid, supplierId, certainty, dropId)
         end
     end
 
+
     Matrix.Log('BUREAU',
         '[İSTİHBARAT SIZINTISI] Drop #%d → Toptancı #%d | Kesinlik=%.3f | Penalty=%.3f | Mağdur=%s',
         dropId, supplierId, certainty, penalty, tostring(citizenid))
 end
 
+
 function Matrix.Bureau.TickDropForensics()
     local threshold  = CfgBureau('BureauLeakCertaintyThreshold', 0.65)
     local staleAfter = CfgBureau('DropForensicsStaleSeconds', 3600)
 
+
     local now = NowEpoch()
     local toRemove = {}
+
 
     for dropId, rec in pairs(DropForensicsByDropId) do
         if (now - (rec.last_activity_at or now)) > staleAfter then
@@ -802,10 +931,12 @@ function Matrix.Bureau.TickDropForensics()
         else
             local certainty, avgQ, N = ComputeDropForensicCertainty(dropId, rec)
 
+
             if not rec.leaked and certainty >= threshold then
                 rec.leaked = true
                 EmitSupplierIntelLeak(rec.citizenid, rec.supplier_id, certainty, dropId)
             end
+
 
             if N > 0 and N % 3 == 0 then
                 Matrix.Log('BUREAU',
@@ -815,10 +946,12 @@ function Matrix.Bureau.TickDropForensics()
         end
     end
 
+
     for _, id in ipairs(toRemove) do
         DropForensicsByDropId[id] = nil
     end
 end
+
 
 CreateThread(function()
     local interval = CfgBureau('DropForensicsTickIntervalSeconds', 30) * 1000
@@ -831,6 +964,7 @@ CreateThread(function()
     end
 end)
 
+
 -- =====================================================================
 -- EVENT BRIDGE
 -- =====================================================================
@@ -841,6 +975,7 @@ RegisterNetEvent('matrix:server:reportUnencryptedComms', function(coords)
     Matrix.Bureau.OnUnencryptedComms({ kind = 'player', source = src }, coords)
 end)
 
+
 RegisterNetEvent('matrix:server:triggerPropaganda', function(trapHouseId)
     local src = source
     if type(src) ~= 'number' or src <= 0 then return end
@@ -848,6 +983,7 @@ RegisterNetEvent('matrix:server:triggerPropaganda', function(trapHouseId)
     if not trapHouseId then return end
     Matrix.Bureau.TriggerPropaganda(trapHouseId)
 end)
+
 
 RegisterNetEvent('matrix:server:reportLogisticsRun', function(trapHouseId)
     local src = source
@@ -857,6 +993,7 @@ RegisterNetEvent('matrix:server:reportLogisticsRun', function(trapHouseId)
     Matrix.Bureau.LogPatternEvent(trapHouseId)
 end)
 
+
 RegisterNetEvent('matrix:server:reportRaidOutcome', function(trapHouseId, outcome)
     local src = source
     if type(src) ~= 'number' or src <= 0 then return end
@@ -865,11 +1002,13 @@ RegisterNetEvent('matrix:server:reportRaidOutcome', function(trapHouseId, outcom
     Matrix.Bureau.ResolveRaidOutcome(trapHouseId, outcome)
 end)
 
+
 RegisterNetEvent('matrix:server:reportDeadDropForensic', function(dropId, quality, supplierId, citizenid)
     local src = source
     if type(src) ~= 'number' or src <= 0 then return end
     Matrix.Bureau.OnDeadDropForensicPickup(dropId, quality, supplierId, citizenid)
 end)
+
 
 -- =====================================================================
 -- EXPORTLAR
@@ -881,12 +1020,14 @@ exports('ReceiveSnitchLeak',      function(t) return Matrix.Bureau.ReceiveSnitch
 exports('IssueRaid',              function(t) return Matrix.Bureau.IssueRaid(t) end)
 exports('ResolveRaidOutcome',     function(t, o) return Matrix.Bureau.ResolveRaidOutcome(t, o) end)
 
+
 exports('OnDeadDropForensicPickup', function(dropId, quality, supplierId, citizenid)
     return Matrix.Bureau.OnDeadDropForensicPickup(dropId, quality, supplierId, citizenid)
 end)
 exports('TickDropForensics', function()
     return Matrix.Bureau.TickDropForensics()
 end)
+
 
 -- =====================================================================
 -- MONOKROM TAKTİK DEBUG PANELİ
@@ -899,9 +1040,11 @@ local function Reply(src, msg)
     end
 end
 
+
 local function ParseCoordNumber(s)
     return tonumber((tostring(s or ''):gsub(',', '')))
 end
+
 
 RegisterCommand('traphouseekle', function(src, args)
     local label = args[1]
@@ -909,6 +1052,7 @@ RegisterCommand('traphouseekle', function(src, args)
     if not x or not y or not z then
         Reply(src, 'Kullanim: /traphouseekle [label] [x] [y] [z]  (boslukla ayirin, virgul KULLANMAYIN)'); return
     end
+
 
     local ok, errOrResult = pcall(Matrix.Bureau.CreateTrapHouse, label, vector3(x, y, z))
     if not ok then
@@ -921,18 +1065,22 @@ RegisterCommand('traphouseekle', function(src, args)
         return
     end
 
+
     Reply(src, 'Trap house olusturma istegi gonderildi (async). Birkac saniye sonra /traphousedurum ile dogrulayin.')
 end, false)
+
 
 RegisterCommand('traphousedurum', function(src, args)
     local id = tonumber(args[1])
     local house = id and Matrix.TrapHouses[id]
     if not house then Reply(src, 'Kullanim: /traphousedurum [id]'); return end
 
+
     Reply(src, ('#%d %s | Deşifre:%.4f/%.2f | Heat:%.3f | Düzenlilik:%.3f | Baskın:%s'):format(
         id, house.label, house.decryption_confidence, Config.Bureau.RaidDecryptionThreshold,
         cyberLeakHeatmap[id] or 0.0, ComputePatternRegularity(id), tostring(house.raid_ordered)))
 end, false)
+
 
 RegisterCommand('desifreekle', function(src, args)
     local id = tonumber(args[1])
@@ -944,6 +1092,7 @@ RegisterCommand('desifreekle', function(src, args)
     Reply(src, ('Trap #%d deşifre: %.4f'):format(id, Matrix.TrapHouses[id].decryption_confidence))
 end, false)
 
+
 RegisterCommand('propagandatetikle', function(src, args)
     local id = tonumber(args[1])
     if not id or not Matrix.TrapHouses[id] then Reply(src, 'Kullanim: /propagandatetikle [id]'); return end
@@ -951,12 +1100,14 @@ RegisterCommand('propagandatetikle', function(src, args)
     Reply(src, ('Momentum:%.3f Heat:%.3f'):format(momentum, heat))
 end, false)
 
+
 RegisterCommand('baskinzorla', function(src, args)
     local id = tonumber(args[1])
     if not id or not Matrix.TrapHouses[id] then Reply(src, 'Kullanim: /baskinzorla [id]'); return end
     Matrix.Bureau.IssueRaid(id)
     Reply(src, ('Trap #%d için baskın ZORLA tetiklendi (test modu).'):format(id))
 end, false)
+
 
 RegisterCommand('baskinsonuclandir', function(src, args)
     local id = tonumber(args[1])
@@ -968,19 +1119,23 @@ RegisterCommand('baskinsonuclandir', function(src, args)
     Reply(src, ok and 'Sonuç kaydedildi.' or 'Geçersiz sonuç veya aktif baskın kaydı yok.')
 end, false)
 
+
 RegisterCommand('yayinbaslat', function(src)
     local ok = Matrix.Bureau.StartLivestream(src)
     Reply(src, ok and 'Canlı yayın başlatıldı (test).' or 'Zaten yayında veya geçersiz src.')
 end, false)
+
 
 RegisterCommand('yayinbitir', function(src)
     local ok = Matrix.Bureau.StopLivestream(src)
     Reply(src, ok and 'Canlı yayın bitirildi (test).' or 'Aktif yayın bulunamadı.')
 end, false)
 
+
 RegisterCommand('momentumgoster', function(src)
     Reply(src, ('Propaganda momentum: %.4f'):format(propagandaMomentum))
 end, false)
+
 
 RegisterCommand('dropsizintiekle', function(src, args)
     local dropId     = tonumber(args[1])
@@ -995,6 +1150,7 @@ RegisterCommand('dropsizintiekle', function(src, args)
               or 'Geçersiz parametre.')
 end, false)
 
+
 RegisterCommand('dropsizintidurum', function(src)
     local count = 0
     for dropId, rec in pairs(DropForensicsByDropId) do
@@ -1008,6 +1164,7 @@ RegisterCommand('dropsizintidurum', function(src)
     Reply(src, ('BureauLeakCertaintyThreshold: %.2f'):format(CfgBureau('BureauLeakCertaintyThreshold', 0.65)))
 end, false)
 
+
 RegisterCommand('dropsizintisifirla', function(src, args)
     local dropId = tonumber(args[1])
     if not dropId then Reply(src, 'Kullanim: /dropsizintisifirla [dropId]'); return end
@@ -1019,11 +1176,13 @@ RegisterCommand('dropsizintisifirla', function(src, args)
     end
 end, false)
 
+
 -- =====================================================================
 -- KATMAN 7 [T4] FAZ 1: BÜRO KİLİDİ
 -- =====================================================================
 local learningCore      = {}
 local dirtyLearningCore = {}
+
 
 local function GetLearningState(trapHouseId)
     local state = learningCore[trapHouseId]
@@ -1038,6 +1197,7 @@ local function GetLearningState(trapHouseId)
     end
     return state
 end
+
 
 function Matrix.Bureau.LoadLearningCore()
     local rows = MySQL.query.await('SELECT * FROM matrix_bureau_learning_core', {}) or {}
@@ -1058,9 +1218,11 @@ function Matrix.Bureau.LoadLearningCore()
     Matrix.Log('BUREAU', '[T4] %d ogrenme hafizasi kaydi RAM onbellege kilitlendi.', #rows)
 end
 
+
 CreateThread(function()
     Matrix.Bureau.LoadLearningCore()
 end)
+
 
 function Matrix.Bureau.FlushDirtyLearningCore()
     local queries = {}
@@ -1099,6 +1261,7 @@ function Matrix.Bureau.FlushDirtyLearningCore()
     end
 end
 
+
 CreateThread(function()
     local interval = Config.Persistence.TrapHouseFlushIntervalMs or 20000
     while true do
@@ -1106,6 +1269,7 @@ CreateThread(function()
         Matrix.Bureau.FlushDirtyLearningCore()
     end
 end)
+
 
 AddEventHandler('txAdmin:events:serverShuttingDown', function()
     Matrix.Log('BUREAU', '[SEC-3] Sunucu kapaniyor -- dirty-set son kurtarma flush islemi baslatildi.')
@@ -1122,8 +1286,10 @@ AddEventHandler('txAdmin:events:serverShuttingDown', function()
     end
 end)
 
+
 local PATTERN_DECAY_INTERVAL_MS = 24 * 60 * 60 * 1000
 local PATTERN_DECAY_FACTOR      = 0.5
+
 
 CreateThread(function()
     while true do
@@ -1145,6 +1311,7 @@ CreateThread(function()
     end
 end)
 
+
 local function ComputeLockdownCoefficient(trapHouseId)
     local state = GetLearningState(trapHouseId)
     local breachRatio = math_min(state.radio_breach_count / Config.Bureau.LockdownBreachCeiling, 1.0)
@@ -1152,9 +1319,11 @@ local function ComputeLockdownCoefficient(trapHouseId)
     return (breachRatio * Config.Bureau.LockdownBreachWeight) + (purityRatio * Config.Bureau.LockdownPurityWeight)
 end
 
+
 local function EvaluateLockdown(trapHouseId)
     local state       = GetLearningState(trapHouseId)
     local coefficient = ComputeLockdownCoefficient(trapHouseId)
+
 
     if coefficient >= Config.Bureau.LockdownEvidenceThreshold and not state.lockdown_active then
         Matrix.Bureau.TriggerLockdown(trapHouseId, coefficient)
@@ -1162,8 +1331,10 @@ local function EvaluateLockdown(trapHouseId)
         Matrix.Bureau.LiftLockdown(trapHouseId, coefficient)
     end
 
+
     return coefficient
 end
+
 
 local function MarkLearningZone(state, label)
     local zones = state.frequent_zones
@@ -1173,39 +1344,49 @@ local function MarkLearningZone(state, label)
     zones[#zones + 1] = label
 end
 
+
 function Matrix.Bureau.RecordRadioBreach(trapHouseId)
     local house = Matrix.TrapHouses[trapHouseId]
     if not house then return end
+
 
     local state = GetLearningState(trapHouseId)
     state.radio_breach_count = state.radio_breach_count + 1
     MarkLearningZone(state, house.label)
 
+
     dirtyLearningCore[trapHouseId] = true
     EvaluateLockdown(trapHouseId)
 end
+
 
 function Matrix.Bureau.RecordLivestreamRadioLeak(trapHouseId, multiplier)
     local house = Matrix.TrapHouses[trapHouseId]
     if not house then return end
 
+
     local state = GetLearningState(trapHouseId)
     state.livestream_leak_accumulator = (state.livestream_leak_accumulator or 0.0)
         + (Config.Bureau.LivestreamRadioLeakPerTick * (multiplier or 1.0))
 
+
     local wholeBreaches = math_floor(state.livestream_leak_accumulator)
     if wholeBreaches < 1 then return end
+
 
     state.livestream_leak_accumulator = state.livestream_leak_accumulator - wholeBreaches
     state.radio_breach_count = state.radio_breach_count + wholeBreaches
     MarkLearningZone(state, house.label)
 
+
     dirtyLearningCore[trapHouseId] = true
     EvaluateLockdown(trapHouseId)
 end
 
+
 function Matrix.Bureau.RecordPurityIntercepted(trapHouseId)
     if not Matrix.TrapHouses[trapHouseId] then return end
+
 
     MySQL.query('SELECT output_purity FROM matrix_kitchen_batches WHERE trap_house_id = ? ORDER BY id DESC LIMIT 1',
         { trapHouseId },
@@ -1213,55 +1394,68 @@ function Matrix.Bureau.RecordPurityIntercepted(trapHouseId)
             local row = rows and rows[1]
             if not row or row.output_purity == nil then return end
 
+
             local state  = GetLearningState(trapHouseId)
             local sample = Matrix.Clamp(tonumber(row.output_purity) or 0.0, 0.0, 1.0)
+
 
             state.purity_sample_count = (state.purity_sample_count or 0) + 1
             local n = state.purity_sample_count
             state.average_purity_intercepted = state.average_purity_intercepted + ((sample - state.average_purity_intercepted) / n)
+
 
             dirtyLearningCore[trapHouseId] = true
             EvaluateLockdown(trapHouseId)
         end)
 end
 
+
 function Matrix.Bureau.TriggerLockdown(trapHouseId, coefficient)
     local state = GetLearningState(trapHouseId)
     state.lockdown_active = true
     dirtyLearningCore[trapHouseId] = true
 
+
     TriggerEvent('matrix:internal:bureauLockdown', trapHouseId, true)
+
 
     local house = Matrix.TrapHouses[trapHouseId]
     Matrix.Log('BUREAU', '[T4][BURO KILIDI] Trap #%d (%s) icin NUKLEER ABLUKA DEVREDE (katsayi=%.3f/%.2f).',
         trapHouseId, (house and house.label) or '?', coefficient, Config.Bureau.LockdownEvidenceThreshold)
 end
 
+
 function Matrix.Bureau.LiftLockdown(trapHouseId, coefficient)
     local state = GetLearningState(trapHouseId)
     state.lockdown_active = false
     dirtyLearningCore[trapHouseId] = true
 
+
     TriggerEvent('matrix:internal:bureauLockdown', trapHouseId, false)
+
 
     local house = Matrix.TrapHouses[trapHouseId]
     Matrix.Log('BUREAU', '[T4][BURO KILIDI] Trap #%d (%s) ablukasi kalkti (katsayi=%.3f/%.2f).',
         trapHouseId, (house and house.label) or '?', coefficient, Config.Bureau.LockdownEvidenceThreshold)
 end
 
+
 function Matrix.Bureau.IsLockedDown(trapHouseId)
     local state = learningCore[trapHouseId]
     return state ~= nil and state.lockdown_active == true
 end
+
 
 function Matrix.Bureau.GetLockdownBulletin(trapHouseId)
     if not trapHouseId or not Matrix.Bureau.IsLockedDown(trapHouseId) then return nil end
     return '[ADLI ANOMALI: BURO KILIDI DEVREDE]', true
 end
 
+
 RegisterCommand('burokilitdurum', function(src, args)
     local id = tonumber(args[1])
     if not id or not Matrix.TrapHouses[id] then Reply(src, 'Kullanim: /burokilitdurum [trapHouseId]'); return end
+
 
     local state       = GetLearningState(id)
     local coefficient = ComputeLockdownCoefficient(id)
@@ -1270,6 +1464,7 @@ RegisterCommand('burokilitdurum', function(src, args)
         coefficient, Config.Bureau.LockdownEvidenceThreshold, tostring(state.lockdown_active)))
 end, false)
 
+
 RegisterCommand('burokilitzorla', function(src, args)
     local id = tonumber(args[1])
     if not id or not Matrix.TrapHouses[id] then Reply(src, 'Kullanim: /burokilitzorla [trapHouseId]'); return end
@@ -1277,16 +1472,20 @@ RegisterCommand('burokilitzorla', function(src, args)
     Reply(src, ('Trap #%d icin BURO KILIDI ZORLA tetiklendi (test modu).'):format(id))
 end, false)
 
+
 lib.callback.register('matrix:callback:getLearningCoreReport', function(src)
     local entries = {}
+
 
     for trapHouseId, house in pairs(Matrix.TrapHouses) do
         local state       = GetLearningState(trapHouseId)
         local coefficient = ComputeLockdownCoefficient(trapHouseId)
 
+
         local text = ('Trap #%d (%s) | Telsiz-Ihlali:%d | Ort.Saflik:%.3f | Katsayi:%.3f/%.2f | Kilit:%s'):format(
             trapHouseId, house.label, state.radio_breach_count, state.average_purity_intercepted,
             coefficient, Config.Bureau.LockdownEvidenceThreshold, state.lockdown_active and 'DEVREDE' or 'kapali')
+
 
         entries[#entries + 1] = {
             trap_house_id              = trapHouseId,
@@ -1300,13 +1499,16 @@ lib.callback.register('matrix:callback:getLearningCoreReport', function(src)
         }
     end
 
+
     table.sort(entries, function(a, b) return a.trap_house_id < b.trap_house_id end)
     return entries
 end)
 
+
 CreateThread(function()
     while true do
         Wait((Config.AI_Matrix_Brain.analysisIntervalMinutes or 60) * 60000)
+
 
         if Config.AI_Matrix_Brain.enabled then
             local ok, err = pcall(Matrix.Bureau.RunAIAdvisoryPass)
@@ -1317,11 +1519,13 @@ CreateThread(function()
     end
 end)
 
+
 function Matrix.Bureau.RunAIAdvisoryPass()
     if Config.AI_Matrix_Brain.provider ~= 'openai' or not Config.AI_Matrix_Brain.apiKey or Config.AI_Matrix_Brain.apiKey == 'sk-...' then
         Matrix.Log('BUREAU', '[T4][AI] enabled=true fakat apiKey yapilandirilmamis, deterministik motor degismeden devam ediyor.')
         return
     end
+
 
     local payload = {}
     for trapHouseId, state in pairs(learningCore) do
@@ -1334,6 +1538,7 @@ function Matrix.Bureau.RunAIAdvisoryPass()
         }
     end
 
+
     local body = json.encode({
         model = 'gpt-4o-mini',
         messages = {
@@ -1342,6 +1547,7 @@ function Matrix.Bureau.RunAIAdvisoryPass()
         }
     })
 
+
     PerformHttpRequest('https://api.openai.com/v1/chat/completions', function(statusCode, response)
         if statusCode ~= 200 then
             Matrix.Log('BUREAU', '[T4][AI] OpenAI istegi basarisiz (HTTP %s); fallbackToDeterministic=%s, ogrenme motoru degismeden calismaya devam ediyor.',
@@ -1349,11 +1555,13 @@ function Matrix.Bureau.RunAIAdvisoryPass()
             return
         end
 
+
         local ok, decoded = pcall(json.decode, response)
         if not ok then
             Matrix.Log('BUREAU', '[T4][AI] OpenAI yaniti cozumlenemedi, deterministik motor etkilenmedi.')
             return
         end
+
 
         TriggerEvent('matrix:internal:aiAdvisoryReceived', decoded)
     end, 'POST', body, {
@@ -1361,6 +1569,7 @@ function Matrix.Bureau.RunAIAdvisoryPass()
         ['Authorization'] = 'Bearer ' .. Config.AI_Matrix_Brain.apiKey
     })
 end
+
 
 -- =====================================================================
 -- [OPSEC FAZ 1] POLİS KİŞİLİK GENETİĞİ + RÜŞVET MOTORU
@@ -1373,7 +1582,9 @@ local function ChecksumOf(raw, salt)
     return sum
 end
 
+
 local PolicePersonalityCache = {}
+
 
 function Matrix.Bureau.GetPolicePersonality(citizenid, npcModelHash, npcCoords)
     local identityKey
@@ -1385,8 +1596,10 @@ function Matrix.Bureau.GetPolicePersonality(citizenid, npcModelHash, npcCoords)
         return nil
     end
 
+
     local cached = PolicePersonalityCache[identityKey]
     if cached then return cached end
+
 
     local sum = ChecksumOf(identityKey, 89)
     local personality = {
@@ -1395,21 +1608,26 @@ function Matrix.Bureau.GetPolicePersonality(citizenid, npcModelHash, npcCoords)
     }
     PolicePersonalityCache[identityKey] = personality
 
+
     Matrix.Log('BUREAU', '[OPSEC][KISILIK GENETIGI] %s -> integrity=%.3f greed=%.3f (salt=89, deterministik)',
         identityKey, personality.integrity, personality.greed)
     return personality
 end
 
+
 local function ChargeSuspectCash(src, amount)
     local ok, player = pcall(function() return Matrix.QBX:GetPlayer(src) end)
     if not ok or not player or not player.PlayerData then return false end
 
+
     local cash = (player.PlayerData.money and player.PlayerData.money.cash) or 0
     if cash < amount then return false end
+
 
     local removeOk, removeResult = pcall(function() return player.Functions.RemoveMoney('cash', amount, 'bribe-offer') end)
     return removeOk and removeResult == true
 end
+
 
 local function PaySuspectCashToOfficer(officerSrc, amount)
     local ok, officer = pcall(function() return Matrix.QBX:GetPlayer(officerSrc) end)
@@ -1418,22 +1636,27 @@ local function PaySuspectCashToOfficer(officerSrc, amount)
     return true
 end
 
+
 function Matrix.Bureau.ProcessBribeOffer(officerSrc, suspectSrc, moneyAmount, caseId)
     if type(officerSrc) ~= 'number' or officerSrc <= 0 then return false, 'bad_officer' end
     if type(suspectSrc) ~= 'number' or suspectSrc <= 0 then return false, 'bad_suspect' end
     moneyAmount = tonumber(moneyAmount) or 0.0
     if moneyAmount ~= moneyAmount or moneyAmount <= 0.0 then return false, 'bad_amount' end
 
+
     local officerState = Matrix.GetOrCreatePlayerState(officerSrc)
     local suspectState = Matrix.GetOrCreatePlayerState(suspectSrc)
     if not officerState or not officerState.citizenid then return false, 'officer_unresolved' end
     if not suspectState or not suspectState.citizenid then return false, 'suspect_unresolved' end
 
+
     local cortisol = Matrix.Clamp((suspectState.biology and suspectState.biology.cortisol_level) or 0.0, 0.0, 1.0)
+
 
     local suspectPed    = GetPlayerPed(suspectSrc)
     local suspectCoords = (suspectPed and suspectPed ~= 0) and GetEntityCoords(suspectPed) or nil
     local trapHouseId   = suspectCoords and FindNearestTrapHouse(suspectCoords)
+
 
     if cortisol > Config.Kitchen.SnitchThreshold then
         if trapHouseId and Matrix.Bureau.RecordRadioBreach then
@@ -1445,12 +1668,15 @@ function Matrix.Bureau.ProcessBribeOffer(officerSrc, suspectSrc, moneyAmount, ca
         return false, { reason = 'suspect_panicking', cortisol = cortisol }
     end
 
+
     local personality = Matrix.Bureau.GetPolicePersonality(officerState.citizenid)
     if not personality then return false, 'officer_personality_unresolved' end
+
 
     local refAmount   = Config.Bureau.BribeReferenceAmount
     local moneyFactor = Matrix.Clamp(moneyAmount / math_max(refAmount, 1.0), 0.0, Config.Bureau.BribeMoneyFactorCeiling)
         * Config.Bureau.BribeMoneyWeight
+
 
     local score =
         (personality.greed * Config.Bureau.BribeGreedWeight)
@@ -1458,8 +1684,10 @@ function Matrix.Bureau.ProcessBribeOffer(officerSrc, suspectSrc, moneyAmount, ca
         - (cortisol * Config.Bureau.BribeCortisolWeight)
         + moneyFactor
 
+
     local threshold = Config.Bureau.BribeSuccessThreshold
     local success    = score >= threshold
+
 
     if success then
         local charged = ChargeSuspectCash(suspectSrc, moneyAmount)
@@ -1467,31 +1695,38 @@ function Matrix.Bureau.ProcessBribeOffer(officerSrc, suspectSrc, moneyAmount, ca
             PaySuspectCashToOfficer(officerSrc, moneyAmount)
         end
 
+
         local tamperedCaseId = nil
         if type(caseId) == 'string' and caseId ~= '' and Matrix.Forensics and Matrix.Forensics.TamperEvidenceLockup then
             local tOk = Matrix.Forensics.TamperEvidenceLockup(officerState.citizenid, caseId, true)
             if tOk then tamperedCaseId = caseId end
         end
 
+
         Matrix.Log('BUREAU',
             '[RUSVET BASARILI] Memur %s (greed=%.3f integrity=%.3f) <- Supheli %s $%.0f | skor=%.3f/%.2f | odeme:%s | sabote-edilen-vaka:%s',
             officerState.citizenid, personality.greed, personality.integrity,
             suspectState.citizenid, moneyAmount, score, threshold, tostring(charged), tostring(tamperedCaseId))
 
+
         return true, { score = score, threshold = threshold, charged = charged, tampered_case = tamperedCaseId }
     end
+
 
     if trapHouseId and Matrix.Bureau.RecordRadioBreach then
         Matrix.Bureau.RecordRadioBreach(trapHouseId)
     end
+
 
     Matrix.Log('BUREAU',
         '[RUSVET REDDEDILDI] Memur %s (greed=%.3f integrity=%.3f) <- Supheli %s $%.0f | skor=%.3f/%.2f | adli surec isliyor',
         officerState.citizenid, personality.greed, personality.integrity,
         suspectState.citizenid, moneyAmount, score, threshold)
 
+
     return false, { score = score, threshold = threshold, reason = 'refused' }
 end
+
 
 RegisterNetEvent('matrix:server:bureau:offerBribe', function(officerSrc, moneyAmount, caseId)
     local suspectSrc = source
@@ -1499,17 +1734,21 @@ RegisterNetEvent('matrix:server:bureau:offerBribe', function(officerSrc, moneyAm
     officerSrc = tonumber(officerSrc)
     if not officerSrc then return end
 
+
     local ok, resultOrReason = Matrix.Bureau.ProcessBribeOffer(officerSrc, suspectSrc, moneyAmount, caseId)
     local detail = (type(resultOrReason) == 'table' and resultOrReason.reason) or tostring(resultOrReason)
 
+
     TriggerClientEvent('matrix:client:actionNotify', suspectSrc, ok,
         ok and 'Memur rusveti kabul etti.' or ('Rusvet reddedildi: %s'):format(tostring(detail)))
+
 
     if officerSrc > 0 and officerSrc ~= suspectSrc then
         TriggerClientEvent('matrix:client:actionNotify', officerSrc, ok,
             ok and 'Bir supheli rusvet teklif etti ve kabul ettiniz.' or 'Bir supheli rusvet teklif etti, reddettiniz/panikledi.')
     end
 end)
+
 
 RegisterCommand('rusvetteklifi', function(src, args)
     local officerSrc  = tonumber(args[1])
@@ -1518,6 +1757,7 @@ RegisterCommand('rusvetteklifi', function(src, args)
     if not officerSrc or not moneyAmount then
         Reply(src, 'Kullanim: /rusvetteklifi [memurSrc] [miktar] [caseId/ballisticId (opsiyonel)]'); return
     end
+
 
     local ok, resultOrReason = Matrix.Bureau.ProcessBribeOffer(officerSrc, src, moneyAmount, caseId)
     if ok then
@@ -1532,15 +1772,19 @@ RegisterCommand('rusvetteklifi', function(src, args)
     end
 end, false)
 
+
 RegisterCommand('polisgenetigi', function(src, args)
     local citizenid = args[1]
     if type(citizenid) ~= 'string' then Reply(src, 'Kullanim: /polisgenetigi [citizenid]'); return end
 
+
     local personality = Matrix.Bureau.GetPolicePersonality(citizenid)
     if not personality then Reply(src, 'Kisilik hesaplanamadi.'); return end
 
+
     Reply(src, ('%s -> Integrity:%.3f Greed:%.3f'):format(citizenid, personality.integrity, personality.greed))
 end, false)
+
 
 exports('GetPolicePersonality', function(citizenid, npcModelHash, npcCoords)
     return Matrix.Bureau.GetPolicePersonality(citizenid, npcModelHash, npcCoords)
@@ -1549,20 +1793,24 @@ exports('ProcessBribeOffer', function(officerSrc, suspectSrc, moneyAmount)
     return Matrix.Bureau.ProcessBribeOffer(officerSrc, suspectSrc, moneyAmount)
 end)
 
+
 -- =====================================================================
 -- [OPSEC FAZ 1 EK] FEAR COEFFICIENT
 -- =====================================================================
 local cachedFearCoefficient = 0.0
 local cachedEliminatedCount = 0
 
+
 local function RefreshFearCoefficient()
     local rows = MySQL.query.await("SELECT COUNT(*) AS n FROM matrix_raid_log WHERE outcome = 'eliminated'", {})
     local n = (rows and rows[1] and tonumber(rows[1].n)) or 0
     cachedEliminatedCount = n
 
+
     local ceiling = CfgBureau('FearCoefficientEliminationCeiling', 20)
     cachedFearCoefficient = Matrix.Clamp(n / math_max(ceiling, 1), 0.0, 1.0)
 end
+
 
 CreateThread(function()
     local ok, err = pcall(RefreshFearCoefficient)
@@ -1578,9 +1826,11 @@ CreateThread(function()
     end
 end)
 
+
 function Matrix.Bureau.GetFearCoefficient()
     return cachedFearCoefficient
 end
+
 
 function Matrix.Bureau.GetEffectiveSnitchThreshold()
     local base    = Config.Kitchen.SnitchThreshold
@@ -1589,6 +1839,7 @@ function Matrix.Bureau.GetEffectiveSnitchThreshold()
     return Matrix.Clamp(raised, base, ceiling)
 end
 
+
 RegisterCommand('korkudurum', function(src)
     Reply(src, ('Infaz-Sayisi:%d | FearCoefficient:%.3f | Taban-Esik:%.2f -> Efektif-Esik:%.3f (tavan:%.2f)'):format(
         cachedEliminatedCount, cachedFearCoefficient,
@@ -1596,8 +1847,10 @@ RegisterCommand('korkudurum', function(src)
         CfgBureau('FearCoefficientSnitchCeiling', 0.95)))
 end, false)
 
+
 exports('GetFearCoefficient', function() return Matrix.Bureau.GetFearCoefficient() end)
 exports('GetEffectiveSnitchThreshold', function() return Matrix.Bureau.GetEffectiveSnitchThreshold() end)
+
 
 -- =====================================================================
 -- [GLOBAL CONVAR] GetBureaucraticVelocity
@@ -1610,12 +1863,15 @@ function Matrix.Bureau.GetBureaucraticVelocity()
     return intensity
 end
 
+
 exports('GetBureaucraticVelocity', function() return Matrix.Bureau.GetBureaucraticVelocity() end)
+
 
 -- =====================================================================
 -- [ADLİ RPG] MAHKEME İFADE ZİNCİRİ
 -- =====================================================================
 local TrialSessions = {}
+
 
 function Matrix.Bureau.RequestAITrialNarrative(officerSrc, session)
     if Config.AI_Matrix_Brain.provider ~= 'openai' or not Config.AI_Matrix_Brain.apiKey or Config.AI_Matrix_Brain.apiKey == 'sk-...' then
@@ -1623,6 +1879,7 @@ function Matrix.Bureau.RequestAITrialNarrative(officerSrc, session)
         Reply(officerSrc, ('Sanık DNA:%s | Eşleşme: %%%.1f'):format(session.dna_id, session.match_certainty * 100.0))
         return
     end
+
 
     local body = json.encode({
         model = 'gpt-4o-mini',
@@ -1635,6 +1892,7 @@ function Matrix.Bureau.RequestAITrialNarrative(officerSrc, session)
             }) }
         }
     })
+
 
     PerformHttpRequest('https://api.openai.com/v1/chat/completions', function(statusCode, response)
         if statusCode ~= 200 then
@@ -1655,16 +1913,20 @@ function Matrix.Bureau.RequestAITrialNarrative(officerSrc, session)
     })
 end
 
+
 function Matrix.Bureau.OpenTrial(officerSrc, defendantSrc, dnaId)
     defendantSrc = tonumber(defendantSrc)
     if not defendantSrc or type(dnaId) ~= 'string' or dnaId == '' then return false, 'bad_args' end
 
+
     local defendantState = Matrix.GetOrCreatePlayerState(defendantSrc)
     if not defendantState or not defendantState.citizenid then return false, 'defendant_unresolved' end
+
 
     local rows = MySQL.query.await(
         'SELECT ballistic_id, match_certainty FROM matrix_forensic_evidence WHERE fingerprint_id = ? ORDER BY match_certainty DESC',
         { dnaId }) or {}
+
 
     local ballisticId, matchCertainty = nil, 0.0
     if rows[1] then
@@ -1674,6 +1936,7 @@ function Matrix.Bureau.OpenTrial(officerSrc, defendantSrc, dnaId)
         matchCertainty = total / #rows
     end
 
+
         -- ★ [FAZ 2] Paravan Liability Insulation
     local defendantPed    = GetPlayerPed(defendantSrc)
     local defendantCoords = (defendantPed and defendantPed ~= 0) and GetEntityCoords(defendantPed) or nil
@@ -1682,12 +1945,14 @@ function Matrix.Bureau.OpenTrial(officerSrc, defendantSrc, dnaId)
         parentTrapId = FindNearestTrapHouse(defendantCoords)
     end
 
+
     local liabilityCitizenid = defendantState.citizenid
     local paravanInsulated   = false
     if parentTrapId then
         liabilityCitizenid, paravanInsulated =
             Matrix.Bureau.ResolveParavanLiability(parentTrapId, defendantState.citizenid)
     end
+
 
     local session = {
         defendant_src            = defendantSrc,
@@ -1704,11 +1969,13 @@ function Matrix.Bureau.OpenTrial(officerSrc, defendantSrc, dnaId)
     }
     TrialSessions[liabilityCitizenid] = session
 
+
     MySQL.insert([[
         INSERT INTO matrix_trial_records
             (defendant_citizenid, dna_id, ballistic_id, match_certainty, lie_count, conviction_weight, verdict, opened_at)
         VALUES (?, ?, ?, ?, 0, ?, 'pending', NOW())
     ]], { defendantState.citizenid, dnaId, ballisticId, matchCertainty, matchCertainty })
+
 
     if not Config.AI_Matrix_Brain.enabled then
         Reply(officerSrc,
@@ -1724,23 +1991,29 @@ function Matrix.Bureau.OpenTrial(officerSrc, defendantSrc, dnaId)
         pcall(Matrix.Bureau.RequestAITrialNarrative, officerSrc, session)
     end
 
+
     return true, session
 end
+
 
 function Matrix.Bureau.RecordTrialResponse(officerSrc, defendantSrc, responseKind)
     defendantSrc = tonumber(defendantSrc)
     if not defendantSrc then return false, 'bad_args' end
 
+
     local defendantState = Matrix.GetOrCreatePlayerState(defendantSrc)
     if not defendantState or not defendantState.citizenid then return false, 'defendant_unresolved' end
 
+
     local session = TrialSessions[defendantState.citizenid]
     if not session then return false, 'no_open_case' end
+
 
     responseKind = tostring(responseKind or ''):lower()
     local isLie       = (responseKind == 'yalan' or responseKind == 'inkar')
     local isConfession = (responseKind == 'itiraf' or responseKind == 'dogru')
     if not isLie and not isConfession then return false, 'bad_response_kind' end
+
 
     if isConfession then
         session.conviction_weight = 1.0
@@ -1754,6 +2027,7 @@ function Matrix.Bureau.RecordTrialResponse(officerSrc, defendantSrc, responseKin
         end
     end
 
+
     MySQL.prepare([[
         UPDATE matrix_trial_records
         SET lie_count = ?, conviction_weight = ?
@@ -1761,8 +2035,10 @@ function Matrix.Bureau.RecordTrialResponse(officerSrc, defendantSrc, responseKin
         ORDER BY opened_at DESC LIMIT 1
     ]], { session.lie_count, session.conviction_weight, session.defendant_citizenid })
 
+
     Reply(officerSrc, ('[ADLİ İFADE - FAZ 2] Yalan-Sayaci:%d | Mahkumiyet-Skoru:%%%.1f'):format(
         session.lie_count, session.conviction_weight * 100.0))
+
 
     if session.conviction_weight >= 1.0 then
         Matrix.Bureau.ExecuteVerdict(officerSrc, session)
@@ -1770,12 +2046,15 @@ function Matrix.Bureau.RecordTrialResponse(officerSrc, defendantSrc, responseKin
         return true, { verdict = 'imprisoned' }
     end
 
+
     return true, { verdict = 'pending' }
 end
+
 
 function Matrix.Bureau.ExecuteVerdict(officerSrc, session)
     local citizenid   = session.defendant_citizenid
     local defendantSrc = session.defendant_src
+
 
     MySQL.prepare('UPDATE matrix_player_state SET imprisoned = 1 WHERE citizenid = ?', { citizenid })
     MySQL.prepare([[
@@ -1784,12 +2063,14 @@ function Matrix.Bureau.ExecuteVerdict(officerSrc, session)
         WHERE defendant_citizenid = ? AND verdict = 'pending'
     ]], { session.lie_count, citizenid })
 
+
     local dbOk, dbErr = pcall(function()
         return MySQL.query.await('UPDATE matrix_bots SET status = ? WHERE handler_citizenid = ?', { 'disbanded', citizenid })
     end)
     if not dbOk then
         Matrix.Log('BUREAU', '[HATA] ExecuteVerdict bulk-disband DB guncellemesi basarisiz: %s', tostring(dbErr))
     end
+
 
     local disbandedCount = 0
     for id, bot in pairs(Matrix.Bots) do
@@ -1803,11 +2084,14 @@ function Matrix.Bureau.ExecuteVerdict(officerSrc, session)
         end
     end
 
+
     Matrix.Log('BUREAU',
         '[KARAKTER WIPE - MAHKUM] %s -> imprisoned=1, %d bagli otonom bot disbanded moduna cekildi.',
         citizenid, disbandedCount)
 
+
     Reply(officerSrc, ('[MAHKEME KARARI] %s -> %%100 Mahkumiyet Skoru. Karakter kilitlendi ve sunucudan tekmelendi.'):format(citizenid))
+
 
         -- ★ [FAZ 2] Paravan insulation
     if session.paravan_insulated then
@@ -1829,6 +2113,7 @@ function Matrix.Bureau.ExecuteVerdict(officerSrc, session)
     end
 end
 
+
 RegisterCommand('davaac', function(src, args)
     local defendantSrc = tonumber(args[1])
     local dnaId = args[2]
@@ -1840,6 +2125,7 @@ RegisterCommand('davaac', function(src, args)
         Reply(src, ('Dava acilamadi: %s'):format(tostring(resultOrReason)))
     end
 end, false)
+
 
 RegisterCommand('davasorgula', function(src, args)
     local defendantSrc = tonumber(args[1])
@@ -1853,8 +2139,10 @@ RegisterCommand('davasorgula', function(src, args)
     end
 end, false)
 
+
 exports('OpenTrial', function(officerSrc, defendantSrc, dnaId) return Matrix.Bureau.OpenTrial(officerSrc, defendantSrc, dnaId) end)
 exports('RecordTrialResponse', function(officerSrc, defendantSrc, responseKind) return Matrix.Bureau.RecordTrialResponse(officerSrc, defendantSrc, responseKind) end)
+
 
 -- =====================================================================
 -- [KOR NOKTA] /telefonuyoket — TELEFON HATTI ADLİ SABOTAJI
@@ -1862,16 +2150,19 @@ exports('RecordTrialResponse', function(officerSrc, defendantSrc, responseKind) 
 function Matrix.Bureau.SabotagePhoneLine(src, dnaId)
     if type(src) ~= 'number' or src <= 0 then return false, 'bad_src' end
 
+
     if type(dnaId) ~= 'string' or dnaId == '' then
         local state = Matrix.GetOrCreatePlayerState(src)
         dnaId = state and state.dna_id
     end
     if type(dnaId) ~= 'string' or dnaId == '' then return false, 'bad_dna' end
 
+
     local queries = {
         { query = 'DELETE FROM matrix_encrypted_messages WHERE dna_id = ?', values = { dnaId } },
         { query = "DELETE FROM matrix_forensic_evidence WHERE fingerprint_id = ? AND evidence_type = 'cyber' AND sealed_as_crime_weapon = 0", values = { dnaId } }
     }
+
 
     local ok, result = pcall(function() return MySQL.transaction.await(queries) end)
     if not ok or result == false then
@@ -1879,11 +2170,13 @@ function Matrix.Bureau.SabotagePhoneLine(src, dnaId)
         return false, 'db_error'
     end
 
+
     Matrix.Log('BUREAU',
         '[TELEFON HATTI SABOTAJI] %s -> kriptolu mesajlar + kesinlesmemis siber deliller TEK atomik transaction ile kazindi.',
         dnaId)
     return true, { dna_id = dnaId }
 end
+
 
 RegisterCommand('telefonuyoket', function(src, args)
     local ok, resultOrReason = Matrix.Bureau.SabotagePhoneLine(src, args[1])
@@ -1894,12 +2187,15 @@ RegisterCommand('telefonuyoket', function(src, args)
     end
 end, false)
 
+
 exports('SabotagePhoneLine', function(src, dnaId) return Matrix.Bureau.SabotagePhoneLine(src, dnaId) end)
+
 
 -- =====================================================================
 -- [KOR NOKTA] KOMA MODU
 -- =====================================================================
 local ComaClock = {}
+
 
 local function ProcessComaCycle()
     for botId, bot in pairs(Matrix.Bots) do
@@ -1908,9 +2204,11 @@ local function ProcessComaCycle()
             Matrix.MarkBotDirty(botId)
             ComaClock[botId] = Matrix.Now()
 
+
             if Matrix.Dispatches and Matrix.Dispatches[botId] then
                 Matrix.CompleteDispatch(botId, 'panic_recall')
             end
+
 
             Matrix.Log('CORE',
                 '[KOMA MODU] Bot #%d withdrawal_index=%.3f -- sevk emirleri VE telsiz iletisimi TAMAMEN bloke edildi.',
@@ -1929,6 +2227,7 @@ local function ProcessComaCycle()
     end
 end
 
+
 CreateThread(function()
     while true do
         Wait(Config.Tick.SecondsPerMinute * Config.Tick.IntervalMs)
@@ -1938,6 +2237,7 @@ CreateThread(function()
         end
     end
 end)
+
 
 -- =====================================================================
 -- [KOR NOKTA] SAATLİK MALİ DENETİM
@@ -1954,6 +2254,7 @@ function Matrix.Bureau.RunHourlyFinancialAudit()
     Matrix.Log('BUREAU', '[SAATLIK MALI DENETIM] matrix_purchase_logs budandi (24 saatten eski %s satir silindi).', tostring(affected))
 end
 
+
 CreateThread(function()
     while true do
         Wait(3600000)
@@ -1964,7 +2265,9 @@ CreateThread(function()
     end
 end)
 
+
 exports('RunHourlyFinancialAudit', function() return Matrix.Bureau.RunHourlyFinancialAudit() end)
+
 
 -- =====================================================================
 -- ★★★ KATMAN 8 — CEPHE B: ANONİM KRİPTO CÜZDAN AĞLARI (SEC-6) ★★★
@@ -1987,13 +2290,16 @@ exports('RunHourlyFinancialAudit', function() return Matrix.Bureau.RunHourlyFina
 --     migration eksikse bile ikinci eşleşme SİLİNMEZ.
 -- =====================================================================
 
+
 Matrix.Bureau.CryptoWallets = Matrix.Bureau.CryptoWallets or {}
 Matrix.Bureau.__CryptoLocks = Matrix.Bureau.__CryptoLocks or {}
+
 
 function Matrix.Bureau.GenerateWalletAddress(holderIdentifier, holderType)
     local seed = ('%s#%s#%s'):format(tostring(holderIdentifier), tostring(holderType), GetCurrentResourceName())
     return '0x' .. sha256.hex(seed):sub(1, 62)
 end
+
 
 local function _LoadCryptoWallet(walletAddress)
     local cached = Matrix.Bureau.CryptoWallets[walletAddress]
@@ -2014,12 +2320,14 @@ local function _LoadCryptoWallet(walletAddress)
     return cached
 end
 
+
 function Matrix.Bureau.EnsureCryptoWallet(holderIdentifier, holderType)
     if type(holderIdentifier) ~= 'string' or holderIdentifier == '' then return nil end
     holderType = (holderType == 'bot') and 'bot' or 'player'
     local addr = Matrix.Bureau.GenerateWalletAddress(holderIdentifier, holderType)
     local existing = _LoadCryptoWallet(addr)
     if existing then return existing end
+
 
     local initialKey = sha256.hex(('%s#%s#GENESIS'):format(addr, holderIdentifier))
     local rec = {
@@ -2039,11 +2347,13 @@ function Matrix.Bureau.EnsureCryptoWallet(holderIdentifier, holderType)
     return rec
 end
 
+
 --- ★ [YAMA 2 + YAMA 5] Burn + Raid — YALNIZCA DB'den okunan meşru
 --- holder_identifier ile çağrılır. Çağıranın targetIdentifier'ına ASLA
 --- güvenilmez. Multi-match görürse ikinci eşleşmeyi SİLMEZ, UYARI basar.
 local function _BurnAndRaidByHolder(holderIdentifier)
     if type(holderIdentifier) ~= 'string' or holderIdentifier == '' then return end
+
 
     -- ★ [YAMA 5] Tek-eşleşme zorlaması (dna_id UNIQUE KEY migration'ı
     -- uygulanmamışsa belt-and-suspenders).
@@ -2060,6 +2370,7 @@ local function _BurnAndRaidByHolder(holderIdentifier)
         end
     end
 
+
     if matchedBotId then
         local bot = Matrix.Bots[matchedBotId]
         if bot and bot.status ~= 'burned' then
@@ -2067,6 +2378,7 @@ local function _BurnAndRaidByHolder(holderIdentifier)
             Matrix.MarkBotDirty(matchedBotId)
         end
     end
+
 
     -- Trap house seçimi: EN KÜÇÜK id (deterministik, RNG yok).
     local firstTrapId
@@ -2077,6 +2389,7 @@ local function _BurnAndRaidByHolder(holderIdentifier)
         pcall(Matrix.Bureau.IssueRaid, firstTrapId)
     end
 end
+
 
 --- ★ [SEC-6][YAMA 2] Rolling cipher mutasyon protokolü — Lua-seviyesi
 --- satır kilidi + SELECT ... FOR UPDATE + DB CAS.
@@ -2094,15 +2407,18 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
     if not amount or amount ~= amount or amount <= 0.0 then return false, 'bad_amount' end
     if type(targetIdentifier) ~= 'string' or targetIdentifier == '' then return false, 'bad_target' end
 
+
     -- ★ 1) Lua-seviyesi satır kilidi (aynı cüzdan için yarış serializasyonu).
     if Matrix.Bureau.__CryptoLocks[walletAddress] then
         return false, 'wallet_busy'
     end
     Matrix.Bureau.__CryptoLocks[walletAddress] = true
 
+
     local function _releaseLock()
         Matrix.Bureau.__CryptoLocks[walletAddress] = nil
     end
+
 
     -- ★ 2) SELECT ... FOR UPDATE (InnoDB satır kilidi).
     local selOk, selRows = pcall(function()
@@ -2120,6 +2436,7 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
     local oldKey           = row.rolling_cipher_key
     local oldSeq           = tonumber(row.tx_sequence) or 0
 
+
     -- ★ 3) Context drift: DB holder ile target uyuşmuyor.
     -- KURBAN KORUMASI: burn+raid DB'den okunan meşru holder üzerinde.
     if holderIdentifier ~= targetIdentifier then
@@ -2132,16 +2449,19 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
         return false, 'context_drift'
     end
 
+
     if balance < amount then
         _releaseLock()
         return false, 'insufficient_balance'
     end
+
 
     -- ★ 4) Cipher mutasyonu (deterministik, RNG yok).
     local newSeq = oldSeq + 1
     local mutationInput = ('%s#%.4f#%s#%d'):format(oldKey, amount, holderIdentifier, newSeq)
     local newKey     = sha256.hex(mutationInput)
     local newBalance = balance - amount
+
 
     -- ★ 5) CAS UPDATE — WHERE rolling_cipher_key = oldKey.
     local updOk, affected = pcall(function()
@@ -2152,7 +2472,9 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
         ]], { newBalance, newKey, newSeq, walletAddress, oldKey })
     end)
 
+
     _releaseLock()
+
 
     if not updOk or type(affected) ~= 'number' or affected == 0 then
         -- CAS başarısız. RAM önbelleği SİLİNİR (lazy reload).
@@ -2165,6 +2487,7 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
         return false, 'cipher_drift'
     end
 
+
     -- ★ 6) Yalnızca KAZANAN CAS RAM önbelleğine yazar.
     Matrix.Bureau.CryptoWallets[walletAddress] = {
         wallet_address     = walletAddress,
@@ -2175,11 +2498,13 @@ function Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targ
         tx_sequence        = newSeq,
     }
 
+
     Matrix.Log('BUREAU',
         '[SEC-6][CRYPTO] wallet=%s -> $%.4f transfer, tx_seq=%d, cipher mutasyona ugradi.',
         walletAddress, amount, newSeq)
     return true, { tx_sequence = newSeq, balance = newBalance }
 end
+
 
 exports('ProcessBribeCryptoTransaction', function(walletAddress, amount, targetIdentifier)
     return Matrix.Bureau.ProcessBribeCryptoTransaction(walletAddress, amount, targetIdentifier)
@@ -2192,10 +2517,13 @@ exports('GenerateWalletAddress', function(holderIdentifier, holderType)
 end)
 
 
+
+
 -- =====================================================================
 -- ★ [FAZ 1] SEC-7 DİNAMİK PAROLA + OPSEC TAMPER LOG
 -- Additive. Mevcut hiçbir fonksiyon gövdesi DEĞİŞTİRİLMEDİ.
 -- =====================================================================
+
 
 -- SHA256-benzeri checksum (shared/crypto.lua sha256.hex AILESINDEN AYRI,
 -- kasitli olarak daha ucuz bir dogrulama katmani -- bkz. asagidaki not).
@@ -2206,6 +2534,7 @@ local function _OpsecChecksum(raw, salt)
     end
     return sum
 end
+
 
 local function _OpsecHash(passphrase)
     local input = tostring(passphrase or '')
@@ -2218,6 +2547,7 @@ local function _OpsecHash(passphrase)
 end
 Matrix.Bureau.__OpsecHash = _OpsecHash
 
+
 -- ---------------------------------------------------------------
 -- Parola rotasyonu (oyun içi /opsecparola ile tetiklenir)
 -- ---------------------------------------------------------------
@@ -2226,6 +2556,7 @@ function Matrix.Bureau.SetOpsecPassphrase(trapHouseId, rawPassphrase)
     if not trapHouseId or not Matrix.TrapHouses[trapHouseId] then
         return false, 'bad_trap_house'
     end
+
 
     if rawPassphrase == nil or rawPassphrase == '' then
         Matrix.TrapHouses[trapHouseId].opsec_passphrase = Config.Bureau.OpsecDefaultPassphrase
@@ -2236,11 +2567,13 @@ function Matrix.Bureau.SetOpsecPassphrase(trapHouseId, rawPassphrase)
         return true, 'default_restored'
     end
 
+
     if type(rawPassphrase) ~= 'string'
         or #rawPassphrase < (Config.Bureau.OpsecPassphraseMinLength or 4)
         or #rawPassphrase > (Config.Bureau.OpsecPassphraseMaxLength or 64) then
         return false, 'bad_passphrase'
     end
+
 
     local hash = _OpsecHash(rawPassphrase)
     Matrix.TrapHouses[trapHouseId].opsec_passphrase = hash
@@ -2248,9 +2581,11 @@ function Matrix.Bureau.SetOpsecPassphrase(trapHouseId, rawPassphrase)
         MySQL.prepare('UPDATE matrix_trap_houses SET opsec_passphrase = ? WHERE id = ?', { hash, trapHouseId })
     end)
 
+
     Matrix.Log('BUREAU', '[SEC-7] Trap #%d parola rotasyona girdi.', trapHouseId)
     return true, 'set'
 end
+
 
 -- ---------------------------------------------------------------
 -- Parola doğrulama (darkchat'ten tetiklenir)
@@ -2260,19 +2595,23 @@ function Matrix.Bureau.VerifyOpsecPassphrase(trapHouseId, citizenid, rawPassphra
     local house = trapHouseId and Matrix.TrapHouses[trapHouseId]
     if not house then return false, 'bad_trap_house' end
 
+
     local storedHash = house.opsec_passphrase
     if type(storedHash) ~= 'string' or storedHash == '' then
         storedHash = _OpsecHash(Config.Bureau.OpsecDefaultPassphrase)
     end
+
 
     local attemptHash = _OpsecHash(rawPassphrase)
     if attemptHash == storedHash then
         return true, 'match'
     end
 
+
     -- Yanlış parola → üssel adım + adli iz
     local step = tonumber(Config.Bureau.OpsecPassphraseGeometricStep) or 0.08
     pcall(Matrix.Bureau.AdvanceDecryption, trapHouseId, step)
+
 
     pcall(function()
         MySQL.insert([[
@@ -2286,11 +2625,13 @@ function Matrix.Bureau.VerifyOpsecPassphrase(trapHouseId, citizenid, rawPassphra
         })
     end)
 
+
     Matrix.Log('BUREAU',
         '[SEC-7 IHLALI] Trap #%d yanlış parola (vatandaş=%s). Üssel adım=%.4f → yeni deşifre=%.4f',
         trapHouseId, tostring(citizenid or 'UNKNOWN'), step, house.decryption_confidence or 0.0)
     return false, 'passphrase_mismatch'
 end
+
 
 -- ---------------------------------------------------------------
 -- RAM ön belleğe opsec_passphrase'i yükle (bureau.lua'nın mevcut
@@ -2316,6 +2657,7 @@ CreateThread(function()
     Matrix.Log('BUREAU', '[SEC-7] %d trap house için dinamik parola RAM ön belleğe alındı.', loaded)
 end)
 
+
 -- ---------------------------------------------------------------
 -- Darkchat parola deneme kanalı
 -- ---------------------------------------------------------------
@@ -2325,12 +2667,15 @@ RegisterNetEvent('matrix:server:darkchat:submitPassphrase', function(trapHouseId
     trapHouseId = tonumber(trapHouseId)
     if not trapHouseId then return end
 
+
     local state = Matrix.GetOrCreatePlayerState(src)
     local citizenid = state and state.citizenid
+
 
     local ok, reason = Matrix.Bureau.VerifyOpsecPassphrase(trapHouseId, citizenid, rawPassphrase)
     TriggerClientEvent('matrix:client:darkchat:passphraseResult', src, ok, reason, trapHouseId)
 end)
+
 
 RegisterCommand('opsecparola', function(src, args)
     local trapHouseId = tonumber(args[1])
@@ -2348,6 +2693,7 @@ RegisterCommand('opsecparola', function(src, args)
     Reply(src, ok and ('Parola: %s'):format(reason) or ('Başarısız: %s'):format(tostring(reason)))
 end, false)
 
+
 -- =====================================================================
 -- ★ [FAZ 2] COMINT RADYO SPEKTRUM AKÜMÜLATÖRÜ
 -- PushToTalkAccum + BreachAccum → deşifre tırmanması + statik parazit.
@@ -2355,12 +2701,15 @@ end, false)
 -- Self-healing: Matrix.Kitchen nil dönerse cyberSkill=1.0 fallback.
 -- =====================================================================
 
+
 Matrix.Bureau.RadioSpectrum = Matrix.Bureau.RadioSpectrum or {}
 Matrix.Bureau.RadioSpectrum.PushToTalkAccum = Matrix.Bureau.RadioSpectrum.PushToTalkAccum or {}
 Matrix.Bureau.RadioSpectrum.JamStrength     = Matrix.Bureau.RadioSpectrum.JamStrength     or {}
 Matrix.Bureau.RadioSpectrum.BreachAccum     = Matrix.Bureau.RadioSpectrum.BreachAccum     or {}
 
+
 local _RADIO_TICK_MS = 1000
+
 
 --- Self-healing skill resolver — Kitchen yoksa/nil dönerse 1.0.
 local function _ResolveRadioCyberSkill(trapHouseId)
@@ -2368,6 +2717,7 @@ local function _ResolveRadioCyberSkill(trapHouseId)
         return 1.0
     end
     if type(Matrix.Bots) ~= 'table' then return 1.0 end
+
 
     local resolved = 1.0
     for _, bot in pairs(Matrix.Bots) do
@@ -2384,28 +2734,34 @@ local function _ResolveRadioCyberSkill(trapHouseId)
     return resolved
 end
 
+
 --- Push-to-talk kaydı — client'ın telsiz bas-konuş event'i buraya bağlanır.
 function Matrix.Bureau.RegisterPushToTalk(citizenid, durationSeconds)
     if type(citizenid) ~= 'string' or citizenid == '' then return end
     durationSeconds = tonumber(durationSeconds) or 0.0
     if durationSeconds ~= durationSeconds or durationSeconds <= 0.0 then return end
 
+
     local spectrum = Matrix.Bureau.RadioSpectrum
     if type(spectrum.PushToTalkAccum) ~= 'table' or type(spectrum.BreachAccum) ~= 'table' then
         return
     end
 
+
     local gain   = tonumber(spectrum.PushToTalkAccum[citizenid]) or 0.0
     local breach = tonumber(spectrum.BreachAccum[citizenid]) or 0.0
+
 
     spectrum.PushToTalkAccum[citizenid] = gain + (durationSeconds * (Config.Bureau.RadioAccumGainPerTick or 0.02))
     spectrum.BreachAccum[citizenid]     = breach + (durationSeconds * (Config.Bureau.RadioBreachGainPerTick or 0.01))
 end
 
+
 -- Radyo ticker — 1 sn, Wait(0) YOK.
 CreateThread(function()
     while true do
         Wait(_RADIO_TICK_MS)
+
 
         local spectrum = Matrix.Bureau.RadioSpectrum
         if type(spectrum) ~= 'table' then goto continue end
@@ -2413,9 +2769,11 @@ CreateThread(function()
         if type(spectrum.JamStrength)     ~= 'table' then goto continue end
         if type(spectrum.BreachAccum)     ~= 'table' then goto continue end
 
+
         for citizenid, rawGain in pairs(spectrum.PushToTalkAccum) do
             local gain = tonumber(rawGain) or 0.0
             if gain ~= gain then gain = 0.0 end
+
 
             -- /sessizlik aktif mi?
             local silent = false
@@ -2423,6 +2781,7 @@ CreateThread(function()
                 local okSil, res = pcall(Matrix.RadioSilence.IsActive, citizenid)
                 silent = okSil and res == true
             end
+
 
             if silent then
                 -- Sessizlik: yavaş azalım
@@ -2440,17 +2799,20 @@ CreateThread(function()
                                           Config.Bureau.RadioAccumMaxGain or 1.0)
                 spectrum.PushToTalkAccum[citizenid] = newGain
 
+
                 local prevJam = tonumber(spectrum.JamStrength[citizenid]) or 0.0
                 if prevJam ~= prevJam then prevJam = 0.0 end
                 local maxStatic = Config.Bureau.RadioStaticMaxIntensity or 0.90
                 local newJam = math.min(prevJam + (Config.Bureau.RadioStaticStep or 0.05), maxStatic)
                 spectrum.JamStrength[citizenid] = newJam
 
+
                 -- En yakın trap house (deterministik: en küçük id)
                 local nearestTrapId
                 for id in pairs(Matrix.TrapHouses or {}) do
                     if not nearestTrapId or id < nearestTrapId then nearestTrapId = id end
                 end
+
 
                 if nearestTrapId and Matrix.Bureau and type(Matrix.Bureau.AdvanceDecryption) == 'function'
                     and newGain > 0.01 then
@@ -2459,6 +2821,7 @@ CreateThread(function()
                     local gainPerTick = (Config.Bureau.RadioBreachGainPerTick or 0.01) * cyberSkill
                     pcall(Matrix.Bureau.AdvanceDecryption, nearestTrapId, gainPerTick)
                 end
+
 
                 -- Statik parazit: kaynağı bul ve ApplyStatic çağır.
                 if Matrix.PlayerSourceIndex and Matrix.Radio
@@ -2472,9 +2835,11 @@ CreateThread(function()
             end
         end
 
+
         ::continue::
     end
 end)
+
 
 -- Client → server bas-konuş event
 RegisterNetEvent('matrix:server:radio:pushToTalk', function(durationSeconds)
@@ -2485,9 +2850,11 @@ RegisterNetEvent('matrix:server:radio:pushToTalk', function(durationSeconds)
     Matrix.Bureau.RegisterPushToTalk(state.citizenid, durationSeconds)
 end)
 
+
 exports('RegisterPushToTalk', function(citizenid, durationSeconds)
     return Matrix.Bureau.RegisterPushToTalk(citizenid, durationSeconds)
 end)
+
 
 -- =====================================================================
 -- ★★★ FAZ 2 — PARAVAN REAL ESTATE & DARK LAWYER BLACKMAIL MOTORU ★★★
@@ -2497,11 +2864,13 @@ end)
 -- intel_fragments), matrix_cash_decay (trap_house_id PK + dirty_amount).
 -- =====================================================================
 
+
 Matrix.Bureau.FragmentedIntel            = Matrix.Bureau.FragmentedIntel            or {}
 Matrix.Bureau.LaunderFreeze              = Matrix.Bureau.LaunderFreeze              or {}
 Matrix.Bureau.HeatExtractionMultiplier   = Matrix.Bureau.HeatExtractionMultiplier   or {}
 Matrix.Bureau.__RemoveBotWrapped         = Matrix.Bureau.__RemoveBotWrapped         or false
 Matrix.Bureau.__LaunderWrapped           = Matrix.Bureau.__LaunderWrapped           or false
+
 
 local DARK_LAWYER_FRAGMENT_PER_EVENT     = 0.05
 local DARK_LAWYER_ACTIVATION_THRESHOLD   = 1.0
@@ -2509,6 +2878,7 @@ local PARAVAN_LOYALTY_THRESHOLD          = 0.85
 local AVUKAT_LEVERAGE_THRESHOLD          = 0.20
 local AVUKAT_BRIBE_REFERENCE             = 50000.0
 local DARK_LAWYER_BUREAU_PREFIX          = 'BUREAU_T'
+
 
 -- ---------------------------------------------------------------
 -- Fragmented Intel yükleyici — sentetik citizenid 'BUREAU_T<trapId>'
@@ -2539,6 +2909,7 @@ function Matrix.Bureau.LoadFragmentedIntel()
     Matrix.Log('BUREAU', '[PARAVAN_REAL_ESTATE_PHASE2] %d dark_lawyer fragment kaydi yuklendi.', count)
 end
 
+
 CreateThread(function()
     Wait(2000)
     local ok, err = pcall(Matrix.Bureau.LoadFragmentedIntel)
@@ -2547,12 +2918,14 @@ CreateThread(function()
     end
 end)
 
+
 -- ---------------------------------------------------------------
 -- Fragment akümülatörü — 0.05/adım
 -- ---------------------------------------------------------------
 function Matrix.Bureau.IncrementDarkLawyerFragment(trapHouseId)
     trapHouseId = tonumber(trapHouseId)
     if not trapHouseId or not Matrix.TrapHouses[trapHouseId] then return end
+
 
     local entry = Matrix.Bureau.FragmentedIntel[trapHouseId]
     if not entry then
@@ -2561,8 +2934,10 @@ function Matrix.Bureau.IncrementDarkLawyerFragment(trapHouseId)
     end
     if entry.active then return end
 
+
     entry.dark_lawyer = Matrix.Clamp(
         entry.dark_lawyer + DARK_LAWYER_FRAGMENT_PER_EVENT, 0.0, DARK_LAWYER_ACTIVATION_THRESHOLD)
+
 
     if entry.dark_lawyer >= DARK_LAWYER_ACTIVATION_THRESHOLD then
         entry.active = true
@@ -2570,6 +2945,7 @@ function Matrix.Bureau.IncrementDarkLawyerFragment(trapHouseId)
             '[PARAVAN_REAL_ESTATE_PHASE2] Trap #%d DARK LAWYER KESFEDILDI (frag=%.2f).',
             trapHouseId, entry.dark_lawyer)
     end
+
 
     local syntheticCid = DARK_LAWYER_BUREAU_PREFIX .. tostring(trapHouseId)
     pcall(function()
@@ -2589,6 +2965,7 @@ function Matrix.Bureau.IncrementDarkLawyerFragment(trapHouseId)
     end)
 end
 
+
 -- ---------------------------------------------------------------
 -- Paravan Liability çözücü
 -- ---------------------------------------------------------------
@@ -2602,6 +2979,7 @@ function Matrix.Bureau.ResolveParavanLiability(trapHouseId, defendantCitizenid)
     return sb, true
 end
 
+
 -- ---------------------------------------------------------------
 -- Straw Buyer ataması
 -- ---------------------------------------------------------------
@@ -2611,37 +2989,46 @@ function Matrix.Bureau.AssignStrawBuyer(trapHouseId, botId, officerCitizenid)
     if not trapHouseId or not Matrix.TrapHouses[trapHouseId] then return false, 'bad_trap_house' end
     if not botId then return false, 'bad_bot_id' end
 
+
     if officerCitizenid and Matrix.Hierarchy and Matrix.Hierarchy.HasCommandAuthority then
         local ok, has = pcall(Matrix.Hierarchy.HasCommandAuthority, officerCitizenid)
         if not ok or not has then return false, 'unauthorized' end
     end
 
+
     local bot = Matrix.Bots and Matrix.Bots[botId]
     if not bot then return false, 'bot_not_found' end
+
 
     local loyalty = (bot.psychology and tonumber(bot.psychology.loyalty_base)) or 0.0
     if loyalty ~= loyalty then loyalty = 0.0 end
     if loyalty <= PARAVAN_LOYALTY_THRESHOLD then return false, 'loyalty_too_low' end
+
 
     local handlerCid = bot.handler_citizenid
     if type(handlerCid) ~= 'string' or handlerCid == '' then
         handlerCid = 'PARAVAN_BOT_' .. tostring(botId)
     end
 
+
     local house = Matrix.TrapHouses[trapHouseId]
     house.straw_buyer_citizenid = handlerCid
+
 
     pcall(function()
         MySQL.prepare('UPDATE matrix_trap_houses SET straw_buyer_citizenid = ? WHERE id = ?',
             { handlerCid, trapHouseId })
     end)
 
+
     Matrix.Log('BUREAU',
         '[PARAVAN_REAL_ESTATE_PHASE2] Trap #%d <- paravan bot #%d (loyalty=%.3f) bagli. Handler=%s',
         trapHouseId, botId, loyalty, handlerCid)
 
+
     return true, { straw_buyer_citizenid = handlerCid, loyalty = loyalty, bot_id = botId }
 end
+
 
 RegisterCommand('paravantapu', function(src, args)
     local trapHouseId = tonumber(args[1])
@@ -2660,6 +3047,7 @@ RegisterCommand('paravantapu', function(src, args)
     end
 end, false)
 
+
 -- ---------------------------------------------------------------
 -- Asset Seizure — paravan deceased/burned
 -- ---------------------------------------------------------------
@@ -2667,8 +3055,10 @@ function Matrix.Bureau._HandleParavanSeizure(bot, reason)
     if type(bot) ~= 'table' then return end
     if reason ~= 'deceased' and reason ~= 'burned' then return end
 
+
     local handlerCid = bot.handler_citizenid
     if type(handlerCid) ~= 'string' or handlerCid == '' then return end
+
 
     for trapHouseId, house in pairs(Matrix.TrapHouses) do
         if house.straw_buyer_citizenid == handlerCid then
@@ -2676,10 +3066,12 @@ function Matrix.Bureau._HandleParavanSeizure(bot, reason)
             Matrix.Bureau.LaunderFreeze[trapHouseId]            = true
             Matrix.Bureau.HeatExtractionMultiplier[trapHouseId] = 2.0
 
+
             pcall(function()
                 MySQL.prepare('UPDATE matrix_trap_houses SET structural_integrity = 0.00 WHERE id = ?',
                     { trapHouseId })
             end)
+
 
             Matrix.Log('BUREAU',
                 '[PARAVAN_REAL_ESTATE_PHASE2] EL KOYMA: Trap #%d | integrity=0.00 | Launder FREEZE | Heat x2 | reason=%s',
@@ -2687,6 +3079,7 @@ function Matrix.Bureau._HandleParavanSeizure(bot, reason)
         end
     end
 end
+
 
 CreateThread(function()
     Wait(1500)
@@ -2703,6 +3096,7 @@ CreateThread(function()
         Matrix.Log('BUREAU', '[PARAVAN_REAL_ESTATE_PHASE2] Matrix.RemoveBot wrapper aktif.')
     end
 end)
+
 
 -- ---------------------------------------------------------------
 -- CashDecay.Launder freeze wrapper (market.lua'da amount<=0.0 erken döner)
@@ -2724,6 +3118,7 @@ CreateThread(function()
     end
 end)
 
+
 -- ---------------------------------------------------------------
 -- Public query'ler
 -- ---------------------------------------------------------------
@@ -2731,9 +3126,11 @@ function Matrix.Bureau.IsLaunderFrozen(trapHouseId)
     return Matrix.Bureau.LaunderFreeze[trapHouseId] == true
 end
 
+
 function Matrix.Bureau.GetHeatExtractionMultiplier(trapHouseId)
     return Matrix.Bureau.HeatExtractionMultiplier[trapHouseId] or 1.0
 end
+
 
 function Matrix.Bureau.FlushDirtyIntel()
     local queries = {}
@@ -2756,15 +3153,18 @@ function Matrix.Bureau.FlushDirtyIntel()
     end
 end
 
+
 function Matrix.Bureau.IsDarkLawyerActive(trapHouseId)
     local e = Matrix.Bureau.FragmentedIntel[trapHouseId]
     return e ~= nil and e.active == true
 end
 
+
 function Matrix.Bureau.GetDarkLawyerFragments(trapHouseId)
     local e = Matrix.Bureau.FragmentedIntel[trapHouseId]
     return (e and e.dark_lawyer) or 0.0
 end
+
 
 -- ---------------------------------------------------------------
 -- Dark Lawyer talimatı
@@ -2775,24 +3175,31 @@ function Matrix.Bureau.ExecuteDarkLawyerInstruction(trapHouseId, bribeAmount, su
     if not trapHouseId or not Matrix.TrapHouses[trapHouseId] then return false, 'bad_trap_house' end
     if not bribeAmount or bribeAmount ~= bribeAmount or bribeAmount < 0.0 then return false, 'bad_bribe' end
 
+
     local entry = Matrix.Bureau.FragmentedIntel[trapHouseId]
     if not entry or not entry.active then return false, 'dark_lawyer_inactive' end
 
+
     local velocity  = Matrix.Bureau.GetBureaucraticVelocity()
     local fragments = Matrix.Clamp(entry.dark_lawyer, 0.0, 1.0)
+
 
     local legal_leverage =
           (fragments          * 0.4)
         + ((bribeAmount / AVUKAT_BRIBE_REFERENCE) * 0.4)
         - (velocity * 0.2)
 
+
     legal_leverage = Matrix.Clamp(legal_leverage, 0.0, 1.0)
 
+
     local house = Matrix.TrapHouses[trapHouseId]
+
 
     if legal_leverage >= AVUKAT_LEVERAGE_THRESHOLD then
         local convictionReduction = legal_leverage * 0.50
         local breachDrop          = math_floor(legal_leverage * 5)
+
 
         pcall(function()
             MySQL.prepare([[
@@ -2803,11 +3210,13 @@ function Matrix.Bureau.ExecuteDarkLawyerInstruction(trapHouseId, bribeAmount, su
             ]], { convictionReduction })
         end)
 
+
         local lc = learningCore[trapHouseId]
         if lc then
             lc.radio_breach_count = math.max(0, (lc.radio_breach_count or 0) - breachDrop)
             dirtyLearningCore[trapHouseId] = true
         end
+
 
         pcall(function()
             MySQL.prepare([[
@@ -2819,10 +3228,12 @@ function Matrix.Bureau.ExecuteDarkLawyerInstruction(trapHouseId, bribeAmount, su
             ]], { trapHouseId, bribeAmount })
         end)
 
+
         Matrix.Log('BUREAU',
             '[PARAVAN_REAL_ESTATE_PHASE2][UZLASMA] Trap #%d | frag=%.3f | bribe=%.0f | leverage=%.4f/%.2f | conviction-=%0.4f | breach-=%d',
             trapHouseId, fragments, bribeAmount, legal_leverage, AVUKAT_LEVERAGE_THRESHOLD,
             convictionReduction, breachDrop)
+
 
         return true, {
             leverage              = legal_leverage,
@@ -2831,10 +3242,12 @@ function Matrix.Bureau.ExecuteDarkLawyerInstruction(trapHouseId, bribeAmount, su
         }
     end
 
+
     -- ★ THE COUNTER-STING SPIRAL
     house.decryption_confidence = Matrix.Clamp(
         (house.decryption_confidence or 0.0) + 0.15, 0.0, 1.0)
     dirtyDecryption[trapHouseId] = true
+
 
     if suspectSrc and Matrix.TrapHouses[trapHouseId] then
         local ped = GetPlayerPed(suspectSrc)
@@ -2853,15 +3266,19 @@ function Matrix.Bureau.ExecuteDarkLawyerInstruction(trapHouseId, bribeAmount, su
         end
     end
 
+
     TriggerEvent('matrix:internal:darkLawyerCounterSting', trapHouseId, suspectSrc, legal_leverage)
     TriggerEvent('matrix:internal:hitSquadRequested', suspectSrc, 'dark_lawyer_counter_sting', 'maximum')
+
 
     Matrix.Log('BUREAU',
         '[PARAVAN_REAL_ESTATE_PHASE2][YENGEC KANONU] Trap #%d bribe REDDEDILDI | leverage=%.4f (<%.2f) | +0.15 desifre spike | heat spike -> hitsquad.',
         trapHouseId, legal_leverage, AVUKAT_LEVERAGE_THRESHOLD)
 
+
     return false, { leverage = legal_leverage, reason = 'counter_sting' }
 end
+
 
 RegisterCommand('avukattalimat', function(src, args)
     local trapHouseId = tonumber(args[1])
@@ -2881,6 +3298,7 @@ RegisterCommand('avukattalimat', function(src, args)
     end
 end, false)
 
+
 RegisterCommand('paravandurum', function(src, args)
     local id = tonumber(args[1])
     if not id or not Matrix.TrapHouses[id] then Reply(src, 'Kullanim: /paravandurum [trapHouseId]'); return end
@@ -2892,6 +3310,7 @@ RegisterCommand('paravandurum', function(src, args)
         Matrix.Bureau.GetHeatExtractionMultiplier(id),
         tostring(e and e.active or false), (e and e.dark_lawyer) or 0.0))
 end, false)
+
 
 -- ---------------------------------------------------------------
 -- EXPORTLAR
