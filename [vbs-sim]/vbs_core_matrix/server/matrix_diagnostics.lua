@@ -274,6 +274,16 @@ local function AddCheck(name, fn)
     FastChecks[#FastChecks + 1] = { name = name, fn = fn }
 end
 
+-- ★ [VETTING AUDIT FIX] kitchen.lua (botany_trash_outcome_0_25,
+-- botany_odor_leak_stage4_unfiltered, pharmacological_dilution_half_
+-- purity_equal_mass) ve main.lua (matrix_forensic_evidence_schema_seal)
+-- Matrix.Diagnostics.RegisterCheck'i mevcut bir public API olarak
+-- varsayip cagiriyordu (guard'li: 'type(Matrix.Diagnostics.RegisterCheck)
+-- == "function"'), ama bu fonksiyon hic disari acilmamisti -- 4 gercek
+-- kontrol sessizce hic kaydolmuyordu. AddCheck zaten var olan dogru
+-- kayit fonksiyonu; sadece disariya aciliyor.
+Matrix.Diagnostics.RegisterCheck = AddCheck
+
 -- =====================================================================
 -- DB ŞEMA YARDIMCILARI — FAZ 4 checks tarafından da kullanılıyor
 -- =====================================================================

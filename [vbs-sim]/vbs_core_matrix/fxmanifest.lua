@@ -18,8 +18,8 @@ client_scripts {
     'client/composer_intro.lua',
     'client/mercenary_followers.lua',
     'client/humint_stalking.lua',
-    'client/anti_glitch.lua'
-    
+    'client/anti_glitch.lua',
+    'client/matrix_events_handler.lua'
 }
 
 server_scripts {
@@ -45,7 +45,8 @@ server_scripts {
     'server/team_ai.lua',
     'server/phone_bridge.lua',
     'server/matrix_diagnostics.lua',
-    'server/cognition_core.lua'
+    'server/cognition_core.lua',
+    'server/player_telemetry.lua'
 }
 
 files {

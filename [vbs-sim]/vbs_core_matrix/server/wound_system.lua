@@ -449,6 +449,22 @@ function Matrix.Wounds.IsUnderMedicalLock(botId)
     return Matrix.Now() < bot.state.medical_lock_until
 end
 
+-- ★ [VETTING AUDIT FIX] team_ai.lua Matrix.Wounds.IsBotPanicking'i mevcut
+-- bir getter olarak varsayip cagiriyordu (guard'li: '... and
+-- Matrix.Wounds.IsBotPanicking(botId)'), ama bu dosyada hicbir zaman
+-- tanimlanmamisti -- her cagri sessizce false'a dusuyordu. Bu modulun
+-- KENDI panic sinyali -- govde (torso) yarasi cortisol_level'i
+-- Config.BotWounds.TorsoCortisolLock'a kilitler -- ayni esik bureau.lua'nin
+-- rusvet akisinda ZATEN "PANIK" olarak kullaniliyor (Config.Kitchen.
+-- SnitchThreshold); ayni terminoloji burada yeniden kullanilir.
+function Matrix.Wounds.IsBotPanicking(botId)
+    local bot = Matrix.Bots and Matrix.Bots[botId]
+    if not bot or not bot.biology then return false end
+    local cortisol  = tonumber(bot.biology.cortisol_level) or 0.0
+    local threshold = (Config.Kitchen and Config.Kitchen.SnitchThreshold) or 0.85
+    return cortisol >= threshold
+end
+
 local function ProcessMedicalLockCycle()
     for botId, bot in pairs(Matrix.Bots) do
         local until_ = bot.state and bot.state.medical_lock_until

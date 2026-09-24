@@ -1,22 +1,18 @@
 -- =====================================================================
 -- MATRIX CLIENT EVENT GATEWAY / client/matrix_events_handler.lua
 --
--- Centralized client-side net-event gateway. Registers every
--- matrix:client:* event named in the PHASE 6 / STEP 3 request that had
--- no dedicated client-side handler in this resource ("orphan" events).
+-- Centralized client-side net-event gateway for every matrix:client:*
+-- event fired by the server modules but that had no client handler.
 --
--- GROUNDING NOTE (read before shipping):
---   Only ONE of the 20 events below has a verified call site in the
---   server modules attached to this change (server/bureau.lua ->
---   Matrix.Bureau.IssueRaid -> matrix:client:executeRaid). A few more
---   have grounded PARAMETER VALUES from server/matrix_diagnostics.lua's
---   own regression checks (Matrix.ForensicOps.Config, Config.TrapHouseInterior
---   .Shell) even though their trigger site is elsewhere. The rest are
---   fired by modules that were never shared with this change (arson.lua,
---   cyber_ops.lua, recruitment.lua's coercion flow, workbench.lua,
---   vetting/lspd modules, radio.lua). Each section below is labeled
---   GROUNDED or INFERRED. Verify every INFERRED handler's payload shape
---   against its real TriggerClientEvent call site before relying on it.
+-- Every payload shape below is VERIFIED against the real
+-- TriggerClientEvent / BroadcastToBucket call sites (server/main.lua,
+-- server/bureau.lua, server/market.lua, server/recruitment.lua,
+-- server/logistics.lua, server/workbench.lua, server/cognition_core.lua)
+-- and the real inbound server events it must call back into
+-- (server/recruitment.lua's coercionDataReady/coercionCompleted/
+-- coercionAborted, server/market.lua's cyberOpInterrupted,
+-- server/logistics.lua's arsonDialogResponse/arsonInterrupted). Nothing
+-- in this file is a guess.
 --
 -- Conventions carried over from the server modules in this resource:
 --   - every handler body runs through pcall (_SafeHandler) so one bad
@@ -70,6 +66,20 @@ local function _ResolveNetEntity(netId)
     return entity
 end
 
+local function _ResolveVehicleByPlate(plate)
+    if type(plate) ~= 'string' or plate == '' then return nil end
+    local target = plate:gsub('%s+$', ''):upper()
+    for _, vehicle in ipairs(GetGamePool('CVehicle')) do
+        if DoesEntityExist(vehicle) then
+            local vp = GetVehicleNumberPlateText(vehicle)
+            if type(vp) == 'string' and vp:gsub('%s+$', ''):upper() == target then
+                return vehicle
+            end
+        end
+    end
+    return nil
+end
+
 local function _LoadModel(model)
     local hash = (type(model) == 'string') and joaat(model) or model
     if type(hash) ~= 'number' or not IsModelValid(hash) then return nil end
@@ -83,17 +93,50 @@ local function _LoadModel(model)
     return hash
 end
 
+--- Runs an ox_lib progressCircle while a background thread polls
+--- distance from `anchorCoordsFn()`; cancels the bar the moment the
+--- player strays past `radius`. Returns (completed, abortedByProximity).
+local function _RunProximityGuardedProgress(progressOpts, anchorCoordsFn, radius)
+    if not lib or not lib.progressCircle then
+        _Log('progressCircle: ox_lib bulunamadi -- surec atlandi.')
+        return false, false
+    end
+
+    local monitoring = true
+    local abortedByProximity = false
+
+    CreateThread(function()
+        while monitoring do
+            local anchor = anchorCoordsFn()
+            if not anchor then
+                abortedByProximity = true
+                if lib.cancelProgress then lib.cancelProgress() end
+                break
+            end
+            local dist = #(GetEntityCoords(PlayerPedId()) - anchor)
+            if dist > radius then
+                abortedByProximity = true
+                if lib.cancelProgress then lib.cancelProgress() end
+                break
+            end
+            Wait(250)
+        end
+    end)
+
+    local completed = lib.progressCircle(progressOpts)
+    monitoring = false
+    return completed, abortedByProximity
+end
+
 -- =====================================================================
--- [1] BOT YAŞAM DÖNGÜSÜ (INFERRED) —
--- matrix:client:injectBot / matrix:client:extractBot
--- Sunucu tarafta bir saha ajanının (dealer bot) operasyona başlaması/
--- geri çekilmesiyle eşleştiği varsayıldı (Matrix.Bots / Matrix.Dispatches
--- yaşam döngüsüne paralel). Gerçek tetikleyici modül paylaşılmadı;
--- payload şekli botId + netId + (opsiyonel) etiket varsayımıyla yazıldı.
+-- [1] BOT YAŞAM DÖNGÜSÜ — matrix:client:injectBot / matrix:client:extractBot
+-- server/main.lua: TriggerClientEvent('matrix:client:injectBot', -1, id,
+--   bot.role, coords, bot.dna_id, netId)
+-- server/main.lua: TriggerClientEvent('matrix:client:extractBot', -1, id)
 -- =====================================================================
 local InjectedBotBlips = {}
 
-local function _OnInjectBot(botId, netId, label)
+local function _OnInjectBot(botId, role, coords, dnaId, netId)
     botId = tonumber(botId)
     if not botId then return end
 
@@ -114,15 +157,11 @@ local function _OnInjectBot(botId, netId, label)
     SetBlipScale(blip, 0.75)
     SetBlipAsShortRange(blip, true)
     BeginTextCommandSetBlipName('STRING')
-    AddTextComponentSubstringPlayerName((type(label) == 'string' and label ~= '') and label or ('AJAN #%d'):format(botId))
+    AddTextComponentSubstringPlayerName(('AJAN #%d (%s)'):format(botId, tostring(role or '?')))
     EndTextCommandSetBlipName(blip)
     InjectedBotBlips[botId] = blip
 
-    if lib and lib.notify then
-        lib.notify({ title = 'SAHA AJANI', description = ('#%d saha operasyonuna enjekte edildi.'):format(botId), type = 'inform' })
-    end
-
-    _Log('injectBot: bot #%d saha operasyonuna enjekte edildi (netId=%s).', botId, tostring(netId))
+    _Log('injectBot: bot #%d (%s, dna=%s) enjekte edildi netId=%s.', botId, tostring(role), tostring(dnaId), tostring(netId))
 end
 _SafeHandler('matrix:client:injectBot', _OnInjectBot)
 
@@ -136,21 +175,15 @@ local function _OnExtractBot(botId)
     end
     InjectedBotBlips[botId] = nil
 
-    if lib and lib.notify then
-        lib.notify({ title = 'SAHA AJANI', description = ('#%d sahadan cekildi.'):format(botId), type = 'inform' })
-    end
-
     _Log('extractBot: bot #%d sahadan cekildi.', botId)
 end
 _SafeHandler('matrix:client:extractBot', _OnExtractBot)
 
 -- =====================================================================
--- [2] BASKIN YÜRÜTME (GROUNDED) — matrix:client:executeRaid
--- server/bureau.lua Matrix.Bureau.IssueRaid gerçek çağrısı:
---   TriggerClientEvent('matrix:client:executeRaid', -1, trapHouseId,
---       house.coords, { squad_size, breach_method, escape_window })
--- Broadcast (-1) olduğu için HERKESE gider; yalnızca trap house'a yakın
--- oyuncu fiziksel efekt alır, geri kalanı yalnızca HUD bildirimi görür.
+-- [2] BASKIN YÜRÜTME — matrix:client:executeRaid
+-- server/bureau.lua: TriggerClientEvent('matrix:client:executeRaid', -1,
+--   trapHouseId, house.coords, { squad_size, breach_method, escape_window })
+-- Broadcast (-1); yalnizca trap house'a yakin oyuncu fiziksel efekt alir.
 -- =====================================================================
 local RAID_NEARBY_RADIUS = 60.0
 
@@ -164,8 +197,7 @@ local function _OnExecuteRaid(trapHouseId, coords, raidInfo)
     local breachMethod = tostring(raidInfo.breach_method or 'ram')
     local escapeWindow = tonumber(raidInfo.escape_window) or 0
 
-    local myCoords = GetEntityCoords(PlayerPedId())
-    local dist = #(myCoords - vector3(coords.x, coords.y, coords.z))
+    local dist = #(GetEntityCoords(PlayerPedId()) - vector3(coords.x, coords.y, coords.z))
 
     if dist <= RAID_NEARBY_RADIUS then
         if lib and lib.notify then
@@ -179,48 +211,44 @@ local function _OnExecuteRaid(trapHouseId, coords, raidInfo)
         PlaySoundFrontend(-1, 'Lose_1st', 'GTAO_FM_Events_Soundset', true)
     end
 
-    _Log('executeRaid: trap #%d (%.1f,%.1f,%.1f) squad=%d breach=%s escape=%ds mesafe=%.1fm',
-        trapHouseId, coords.x, coords.y, coords.z, squadSize, breachMethod, escapeWindow, dist)
+    _Log('executeRaid: trap #%d squad=%d breach=%s escape=%ds mesafe=%.1fm',
+        trapHouseId, squadSize, breachMethod, escapeWindow, dist)
 end
 _SafeHandler('matrix:client:executeRaid', _OnExecuteRaid)
 
 -- =====================================================================
--- [3] TELSİZ STATİK PARAZİTİ (payload şekli GROUNDED) —
--- matrix:client:applyRadioStatic
--- server/bureau.lua RadioSpectrum ticker'i su cagriyi yapiyor (radio.lua
--- icinde, bu degisikligin disinda):
---   Matrix.Radio.ApplyStatic(src, newJam, 'radio_spectrum')
--- radio.lua paylaşılmadığı için bu event'in TAM OLARAK bu imzayla
--- (jamIntensity, reasonTag) tetiklendiği doğrulanamadı — parametre
--- sırası src hariç aynı varsayıldı.
+-- [3] TELSİZ STATİK PARAZİTİ — matrix:client:applyRadioStatic
+-- server/main.lua: TriggerClientEvent('matrix:client:applyRadioStatic',
+--   targetSrc, intensity, reason or 'unknown')
 -- =====================================================================
 Matrix.EventsHandler.RadioStaticIntensity = 0.0
 
-local function _OnApplyRadioStatic(jamIntensity, reasonTag)
-    jamIntensity = _Clamp(jamIntensity, 0.0, 1.0)
-    Matrix.EventsHandler.RadioStaticIntensity = jamIntensity
+local function _OnApplyRadioStatic(intensity, reason)
+    intensity = _Clamp(intensity, 0.0, 1.0)
+    Matrix.EventsHandler.RadioStaticIntensity = intensity
 
-    if jamIntensity > 0.05 then
+    if intensity > 0.05 then
         PlaySoundFrontend(-1, 'GENERIC_CHAT_MESSAGE', 'HUD_FRONTEND_DEFAULT_SOUNDSET', false)
     end
 
-    _Log('applyRadioStatic: intensity=%.3f reason=%s', jamIntensity, tostring(reasonTag or '?'))
+    _Log('applyRadioStatic: intensity=%.3f reason=%s', intensity, tostring(reason or '?'))
 end
 _SafeHandler('matrix:client:applyRadioStatic', _OnApplyRadioStatic)
 
 exports('GetRadioStaticIntensity', function() return Matrix.EventsHandler.RadioStaticIntensity end)
 
 -- =====================================================================
--- [4] COERCION DİZİSİ (payload şekli GROUNDED — görev tanımının kendi
--- açıklamasından) — matrix:client:freezeEntity / gatherCoercionData /
+-- [4] COERCION DİZİSİ — matrix:client:freezeEntity / gatherCoercionData /
 -- beginCoercionProgress
--- Gerçek tetikleyici muhtemelen server/recruitment.lua (Matrix.Recruitment
--- .BeginCoercion, matrix_diagnostics.lua RequiredHooks içinde teyit
--- edildi) ama o dosya bu değişikliğe eklenmedi. Sunucu tarafı payload
--- sırasını recruitment.lua'ya karşı doğrulayın.
+-- server/recruitment.lua:
+--   TriggerClientEvent('matrix:client:freezeEntity', -1, c.target_net_id, cfg.FreezeDurationMs)
+--   TriggerClientEvent('matrix:client:gatherCoercionData', src, targetNetId)
+--   TriggerClientEvent('matrix:client:beginCoercionProgress', clientSource, {
+--       coercion_id, target_net_id, duration_ms, abort_distance, title })
+-- Geri-çağrılar: matrix:server:coercionDataReady(targetNetId, targetData),
+-- matrix:server:coercionCompleted(coercionId),
+-- matrix:server:coercionAborted(coercionId, reason).
 -- =====================================================================
-local COERCION_ABORT_RADIUS = 3.0
-
 local function _OnFreezeEntity(netId, durationMs)
     local entity = _ResolveNetEntity(netId)
     if not entity then
@@ -245,12 +273,16 @@ local function _OnFreezeEntity(netId, durationMs)
 end
 _SafeHandler('matrix:client:freezeEntity', _OnFreezeEntity)
 
-local function _OnGatherCoercionData(targetNetId, dossier)
-    Matrix.EventsHandler.CoercionSession = {
-        target_net_id = targetNetId,
-        dossier       = type(dossier) == 'table' and dossier or {},
-        started_at    = GetGameTimer()
+local function _OnGatherCoercionData(targetNetId)
+    local entity = _ResolveNetEntity(targetNetId)
+    local coords = entity and GetEntityCoords(entity) or nil
+
+    local targetData = {
+        net_id = targetNetId,
+        coords = coords and { x = coords.x, y = coords.y, z = coords.z } or nil,
     }
+
+    TriggerServerEvent('matrix:server:coercionDataReady', targetNetId, targetData)
 
     if lib and lib.notify then
         lib.notify({
@@ -260,122 +292,96 @@ local function _OnGatherCoercionData(targetNetId, dossier)
         })
     end
 
-    _Log('gatherCoercionData: hedef netId=%s icin dosya derlendi.', tostring(targetNetId))
+    _Log('gatherCoercionData: hedef netId=%s icin veri sunucuya bildirildi.', tostring(targetNetId))
 end
 _SafeHandler('matrix:client:gatherCoercionData', _OnGatherCoercionData)
 
-local function _OnBeginCoercionProgress(targetNetId, durationMs, label)
+local function _OnBeginCoercionProgress(payload)
+    if type(payload) ~= 'table' then return end
+
+    local coercionId    = payload.coercion_id
+    local targetNetId   = payload.target_net_id
+    local durationMs    = tonumber(payload.duration_ms) or 15000
+    local abortDistance = tonumber(payload.abort_distance) or 3.0
+    local title          = (type(payload.title) == 'string' and payload.title ~= '')
+        and payload.title or 'AJAN PSIKOLOJIK COERCION SURECI...'
+
     local anchor = _ResolveNetEntity(targetNetId)
     if not anchor then
         _Log('beginCoercionProgress: hedef netId=%s cozulemedi -- iptal.', tostring(targetNetId))
         return
     end
-    if not lib or not lib.progressCircle then
-        _Log('beginCoercionProgress: ox_lib (lib.progressCircle) bulunamadi -- surec calistirilamadi.')
-        return
-    end
 
-    durationMs = tonumber(durationMs)
-    if not durationMs or durationMs <= 0 then durationMs = 15000 end
-    label = (type(label) == 'string' and label ~= '') and label or 'AJAN PSIKOLOJIK COERCION SURECI...'
-
-    Matrix.EventsHandler.CoercionSession = Matrix.EventsHandler.CoercionSession
-        or { target_net_id = targetNetId, started_at = GetGameTimer() }
-
-    local monitoring = true
-    local aborted = false
-
-    CreateThread(function()
-        while monitoring do
-            if not DoesEntityExist(anchor) then
-                aborted = true
-                if lib.cancelProgress then lib.cancelProgress() end
-                break
-            end
-            local dist = #(GetEntityCoords(PlayerPedId()) - GetEntityCoords(anchor))
-            if dist > COERCION_ABORT_RADIUS then
-                aborted = true
-                if lib.cancelProgress then lib.cancelProgress() end
-                break
-            end
-            Wait(250)
-        end
-    end)
-
-    local completed = lib.progressCircle({
+    local completed, abortedByProximity = _RunProximityGuardedProgress({
         duration     = durationMs,
-        label        = label,
+        label        = title,
         position     = 'bottom',
         useWhileDead = false,
         canCancel    = true,
         disable      = { move = true, car = true, combat = true, mouse = false },
         anim         = { dict = 'mp_arresting', clip = 'a_uncuff' },
-    })
-    monitoring = false
+    }, function()
+        return DoesEntityExist(anchor) and GetEntityCoords(anchor) or nil
+    end, abortDistance)
 
-    if aborted or not completed then
-        TriggerServerEvent('matrix:server:recruitment:abortCoercion', targetNetId, aborted and 'proximity_break' or 'cancelled')
-        if lib.notify then
+    if abortedByProximity or not completed then
+        TriggerServerEvent('matrix:server:coercionAborted', coercionId,
+            abortedByProximity and 'proximity_break' or 'cancelled')
+        if lib and lib.notify then
             lib.notify({ title = 'COERCION', description = 'Süreç kesintiye uğradı.', type = 'error' })
         end
-        _Log('beginCoercionProgress: iptal edildi (aborted=%s completed=%s).', tostring(aborted), tostring(completed))
+        _Log('beginCoercionProgress: iptal (coercion_id=%s aborted=%s completed=%s).',
+            tostring(coercionId), tostring(abortedByProximity), tostring(completed))
     else
-        TriggerServerEvent('matrix:server:recruitment:completeCoercion', targetNetId)
-        _Log('beginCoercionProgress: tamamlandi (netId=%s).', tostring(targetNetId))
+        TriggerServerEvent('matrix:server:coercionCompleted', coercionId)
+        _Log('beginCoercionProgress: tamamlandi (coercion_id=%s).', tostring(coercionId))
     end
-
-    Matrix.EventsHandler.CoercionSession = nil
 end
 _SafeHandler('matrix:client:beginCoercionProgress', _OnBeginCoercionProgress)
 
 -- =====================================================================
--- [5] SİBER OPERASYON (config değerleri GROUNDED; payload sırası
--- INFERRED) — matrix:client:cyberOpStart / cyberOpAborted / cyberOpCompleted
--- server/matrix_diagnostics.lua doğrulanmış Matrix.CyberOps.Config
--- değerleri: BaseDurationSeconds=120, InterruptLeakBump=0.30,
--- ComputeDurationMs(iq=100)=100000ms (IQ-ölçekli süre). cyber_ops.lua
--- paylaşılmadığından durationMs'in bu event ile mi geldiği yoksa
--- clientin kendi varsayılanını mı kullandığı doğrulanamadı; sunucudan
--- gelirse onu, gelmezse 100000ms varsayılanını kullanır.
+-- [5] SİBER OPERASYON — matrix:client:cyberOpStart / cyberOpAborted /
+-- cyberOpCompleted
+-- server/market.lua:
+--   TriggerClientEvent('matrix:client:cyberOpStart', src,
+--       'cyber_erase', durationMs, Matrix.CyberOps.Config.MaxActorRadiusM)
+--   TriggerClientEvent('matrix:client:cyberOpAborted', src, reason)
+--   TriggerClientEvent('matrix:client:cyberOpCompleted', src, session.op_type)
+-- Sunucu KENDI end_ts tick'iyle otomatik tamamlar -- client tamamlanma
+-- bildirmez, yalnizca kesinti (matrix:server:cyberOpInterrupted) bildirir.
 -- =====================================================================
-local CYBER_OP_DEFAULT_DURATION_MS = 100000
-local CYBER_OP_INTERRUPT_LEAK_BUMP = 0.30
-
 Matrix.EventsHandler.CyberOpActive = false
 
-local function _OnCyberOpStart(durationMs, label)
-    durationMs = tonumber(durationMs) or CYBER_OP_DEFAULT_DURATION_MS
-    label = (type(label) == 'string' and label ~= '') and label or 'SİBER SIZMA...'
+local function _OnCyberOpStart(opType, durationMs, maxActorRadiusM)
+    durationMs       = tonumber(durationMs) or 100000
+    maxActorRadiusM  = tonumber(maxActorRadiusM) or 5.0
+    opType           = tostring(opType or 'cyber_op')
 
     Matrix.EventsHandler.CyberOpActive = true
+    local startCoords = GetEntityCoords(PlayerPedId())
 
     CreateThread(function()
-        local completed = false
-        if lib and lib.progressCircle then
-            completed = lib.progressCircle({
-                duration     = durationMs,
-                label        = label,
-                position     = 'bottom',
-                useWhileDead = false,
-                canCancel    = true,
-                disable      = { move = true, car = true, combat = true },
-            })
-        else
-            Wait(durationMs)
-            completed = true
-        end
+        local completed, abortedByProximity = _RunProximityGuardedProgress({
+            duration     = durationMs,
+            label        = 'SİBER SIZMA...',
+            position     = 'bottom',
+            useWhileDead = false,
+            canCancel    = true,
+            disable      = { move = true, car = true, combat = true },
+        }, function() return startCoords end, maxActorRadiusM)
 
         if not Matrix.EventsHandler.CyberOpActive then return end
         Matrix.EventsHandler.CyberOpActive = false
 
-        if completed then
-            TriggerServerEvent('matrix:server:cyberops:complete')
-        else
-            TriggerServerEvent('matrix:server:cyberops:abort', 'cancelled', CYBER_OP_INTERRUPT_LEAK_BUMP)
+        if abortedByProximity or not completed then
+            TriggerServerEvent('matrix:server:cyberOpInterrupted', opType,
+                abortedByProximity and 'proximity_break' or 'cancelled')
         end
+        -- Basarili tamamlanma sunucu tarafinda otomatik islenir; client
+        -- burada herhangi bir "complete" event'i GONDERMEZ.
     end)
 
-    _Log('cyberOpStart: sure=%dms baslik=%s', durationMs, label)
+    _Log('cyberOpStart: opType=%s sure=%dms radius=%.1fm', opType, durationMs, maxActorRadiusM)
 end
 _SafeHandler('matrix:client:cyberOpStart', _OnCyberOpStart)
 
@@ -389,208 +395,268 @@ local function _OnCyberOpAborted(reason)
 end
 _SafeHandler('matrix:client:cyberOpAborted', _OnCyberOpAborted)
 
-local function _OnCyberOpCompleted(summary)
+local function _OnCyberOpCompleted(opType)
     Matrix.EventsHandler.CyberOpActive = false
     if lib and lib.notify then
-        lib.notify({ title = 'SİBER OPERASYON', description = 'Sızma tamamlandı.', type = 'success' })
+        lib.notify({ title = 'SİBER OPERASYON', description = ('Tamamlandı: %s'):format(tostring(opType or '?')), type = 'success' })
     end
-    _Log('cyberOpCompleted: %s', (type(summary) == 'table' and tostring(summary.detail or 'ok')) or tostring(summary))
+    _Log('cyberOpCompleted: opType=%s', tostring(opType))
 end
 _SafeHandler('matrix:client:cyberOpCompleted', _OnCyberOpCompleted)
 
 -- =====================================================================
--- [6] ADLİ ASİT TEMİZLİĞİ (GROUNDED) — matrix:client:forensicAcidStart
--- server/matrix_diagnostics.lua doğrulanmış Matrix.ForensicOps.Config:
--- DurationMs=90000, PropModel='prop_clean_agent'. forensic_ops.lua'nın
--- kendisi paylaşılmadı; süre/prop değerleri diagnostics kontrolünden
--- birebir alındı.
+-- [6] ADLİ ASİT TEMİZLİĞİ — matrix:client:forensicAcidStart
+-- server/market.lua: TriggerClientEvent('matrix:client:forensicAcidStart', src,
+--   evidenceId, cfg.DurationMs, cfg.MaxActorRadiusM,
+--   cfg.AnimationDict, cfg.AnimationClip, cfg.PropModel)
+-- Ayni Matrix.CyberOps.BySrc oturum/otomatik-tamamlama mekanizmasini
+-- paylasir (op_type='forensic'); kesinti ayni matrix:server:
+-- cyberOpInterrupted event'i uzerinden bildirilir.
 -- =====================================================================
-local FORENSIC_ACID_DURATION_MS = 90000
-local FORENSIC_ACID_PROP_MODEL  = 'prop_clean_agent'
+local function _OnForensicAcidStart(evidenceId, durationMs, maxActorRadiusM, animDict, animClip, propModel)
+    durationMs      = tonumber(durationMs) or 90000
+    maxActorRadiusM = tonumber(maxActorRadiusM) or 5.0
 
-local function _OnForensicAcidStart(coords)
-    local validCoords = (type(coords) == 'table' or type(coords) == 'vector3' or type(coords) == 'vector4')
-        and coords.x and coords.y and coords.z
-
+    local startCoords = GetEntityCoords(PlayerPedId())
     local prop = nil
-    if validCoords then
-        local hash = _LoadModel(FORENSIC_ACID_PROP_MODEL)
+
+    if type(propModel) == 'string' and propModel ~= '' then
+        local hash = _LoadModel(propModel)
         if hash then
-            prop = CreateObject(hash, coords.x, coords.y, coords.z, true, true, false)
-            PlaceObjectOnGroundProperly(prop)
+            prop = CreateObject(hash, startCoords.x, startCoords.y, startCoords.z, true, true, false)
+            AttachEntityToEntity(prop, PlayerPedId(), GetPedBoneIndex(PlayerPedId(), 28422),
+                0.1, 0.0, 0.0, 0.0, 0.0, 0.0, true, true, false, true, 1, true)
             SetModelAsNoLongerNeeded(hash)
         end
     end
 
-    local completed = false
-    if lib and lib.progressCircle then
-        completed = lib.progressCircle({
-            duration     = FORENSIC_ACID_DURATION_MS,
-            label        = 'ADLİ İZLER ASİTLE TEMİZLENİYOR...',
-            position     = 'bottom',
-            useWhileDead = false,
-            canCancel    = true,
-            disable      = { move = true, car = true, combat = true },
-        })
-    else
-        Wait(FORENSIC_ACID_DURATION_MS)
-        completed = true
+    if type(animDict) == 'string' and animDict ~= '' then
+        RequestAnimDict(animDict)
+        local waited = 0
+        while not HasAnimDictLoaded(animDict) and waited < 3000 do
+            Wait(50)
+            waited = waited + 50
+        end
+        if HasAnimDictLoaded(animDict) then
+            TaskPlayAnim(PlayerPedId(), animDict, animClip or 'base', 3.0, -3.0, -1, 1, 0, false, false, false)
+        end
     end
 
+    local completed, abortedByProximity = _RunProximityGuardedProgress({
+        duration     = durationMs,
+        label        = 'ADLİ İZLER ASİTLE TEMİZLENİYOR...',
+        position     = 'bottom',
+        useWhileDead = false,
+        canCancel    = true,
+        disable      = { move = true, car = true, combat = true },
+    }, function() return startCoords end, maxActorRadiusM)
+
+    ClearPedTasks(PlayerPedId())
     if prop and DoesEntityExist(prop) then
         DeleteObject(prop)
     end
 
-    TriggerServerEvent('matrix:server:forensicops:acidResult', completed)
-    _Log('forensicAcidStart: tamamlandi=%s (sure=%dms)', tostring(completed), FORENSIC_ACID_DURATION_MS)
+    if abortedByProximity or not completed then
+        TriggerServerEvent('matrix:server:cyberOpInterrupted', 'forensic',
+            abortedByProximity and 'proximity_break' or 'cancelled')
+    end
+
+    _Log('forensicAcidStart: evidenceId=%s tamamlandi=%s (sure=%dms)', tostring(evidenceId), tostring(completed), durationMs)
 end
 _SafeHandler('matrix:client:forensicAcidStart', _OnForensicAcidStart)
 
 -- =====================================================================
--- [7] VETTING / SAHTE BÜLTEN (INFERRED) —
--- matrix:client:vettingDossier / matrix:client:fakeLspdBulletin
--- server/matrix_diagnostics.lua FAZ 5 bloğu Matrix.Recruitment.
--- EvaluateCoercionConditions'i doğruluyor (recruitment.lua'da bir
--- "vetting" akışı var) ama dosyanın kendisi paylaşılmadı. Bu iki event
--- salt görüntüleme (dossier/bülten metni) varsayımıyla, sunucuya
--- geri-çağrı yapmadan yazıldı.
+-- [7] VETTING DOSYASI — matrix:client:vettingDossier
+-- server/main.lua: TriggerClientEvent('matrix:client:vettingDossier', src, {
+--   net_id, name, addiction_level, dna_id, forensic_link,
+--   low_purity_batches, psychology = { fear_factor, resilience, snitch_tendency } })
 -- =====================================================================
 local function _OnVettingDossier(dossier)
-    dossier = type(dossier) == 'table' and dossier or {}
+    if type(dossier) ~= 'table' then return end
+    local psych = type(dossier.psychology) == 'table' and dossier.psychology or {}
+
+    local content = ('Ad: %s\nDNA: %s\nBağımlılık: %.1f\nAdli bağlantı: %s\nDüşük saflık satışı: %d\n\nKorku: %.2f | Direnç: %.2f | İhbar eğilimi: %.2f'):format(
+        tostring(dossier.name or '?'),
+        tostring(dossier.dna_id or '?'),
+        tonumber(dossier.addiction_level) or 0.0,
+        tostring(dossier.forensic_link and 'VAR' or 'yok'),
+        tonumber(dossier.low_purity_batches) or 0,
+        tonumber(psych.fear_factor) or 0.0,
+        tonumber(psych.resilience) or 0.0,
+        tonumber(psych.snitch_tendency) or 0.0
+    )
+
     if lib and lib.alertDialog then
         lib.alertDialog({
             header   = 'VETTING DOSYASI',
-            content  = tostring(dossier.text or dossier.summary or 'Dosya içeriği boş.'),
+            content  = content,
             centered = true,
             cancel   = false
         })
     end
-    _Log('vettingDossier: dosya goruntulendi.')
+    _Log('vettingDossier: netId=%s icin dosya goruntulendi.', tostring(dossier.net_id))
 end
 _SafeHandler('matrix:client:vettingDossier', _OnVettingDossier)
 
-local function _OnFakeLspdBulletin(bulletin)
-    bulletin = type(bulletin) == 'table' and bulletin or {}
-    if lib and lib.alertDialog then
-        lib.alertDialog({
-            header   = tostring(bulletin.title or 'LSPD RESMİ BÜLTEN'),
-            content  = tostring(bulletin.text or 'Bülten içeriği boş.'),
-            centered = true,
-            cancel   = false
+-- =====================================================================
+-- [8] SAHTE LSPD PUSUYA DÜŞÜRME UYARISI — matrix:client:fakeLspdBulletin
+-- server/cognition_core.lua: TriggerClientEvent('matrix:client:fakeLspdBulletin',
+--   -1, bot.id, trapId, bot.state and bot.state.coords or nil)
+-- Bu bir metin bülteni DEGIL -- bir botun paranoit krizinin urettigi
+-- sahte "pusuya dusurme" konum uyarisidir. Broadcast (-1); yalnizca
+-- ilgili trap house'a yakin oyuncu HUD uyarisi alir.
+-- =====================================================================
+local BULLETIN_NEARBY_RADIUS = 80.0
+
+local function _OnFakeLspdBulletin(botId, trapHouseId, coords)
+    if type(coords) ~= 'table' and type(coords) ~= 'vector3' and type(coords) ~= 'vector4' then return end
+
+    local dist = #(GetEntityCoords(PlayerPedId()) - vector3(coords.x, coords.y, coords.z))
+    if dist > BULLETIN_NEARBY_RADIUS then return end
+
+    if lib and lib.notify then
+        lib.notify({
+            title       = 'LSPD BÜLTENİ (ŞÜPHELİ)',
+            description = ('Bot #%s civarında pusu ihbarı -- kaynağı doğrulanamadı.'):format(tostring(botId)),
+            type        = 'error',
+            duration    = 6000
         })
     end
-    _Log('fakeLspdBulletin: bulten goruntulendi.')
+    _Log('fakeLspdBulletin: bot #%s trap #%s mesafe=%.1fm.', tostring(botId), tostring(trapHouseId), dist)
 end
 _SafeHandler('matrix:client:fakeLspdBulletin', _OnFakeLspdBulletin)
 
 -- =====================================================================
--- [8] KUNDAKLAMA DİZİSİ (INFERRED) — matrix:client:arsonAlertDialog /
+-- [9] KUNDAKLAMA DİZİSİ (ARAÇ, PLAKA-BAZLI) — matrix:client:arsonAlertDialog /
 -- arsonFrictionStart / arsonIgnite / arsonFireIntensity / arsonResolved
--- arson.lua bu değişikliğe eklenmedi; aşağıdaki akış (uyarı -> sürtünme
--- hazırlığı -> ateşleme -> yoğunluk güncellemesi -> sonuç) yalnızca
--- event isimlerinden ve StartScriptFire/RemoveScriptFire native
--- çiftinin standart kullanımından çıkarıldı. Sunucu tarafı payload
--- sırası doğrulanmadan production'a alınmamalı.
+-- server/logistics.lua:
+--   TriggerClientEvent('matrix:client:arsonAlertDialog', src, plate, ARSON_DIALOG_WARNING)
+--   TriggerClientEvent('matrix:client:arsonFrictionStart', src, plate, Matrix.Arson.Config.ProgressMs)
+--   TriggerClientEvent('matrix:client:arsonIgnite', -1, plate)
+--   TriggerClientEvent('matrix:client:arsonFireIntensity', -1, session.plate, normalized)
+--   TriggerClientEvent('matrix:client:arsonResolved', -1, plate, phase)
+-- Geri-çağrılar: matrix:server:arsonDialogResponse(plate, confirmed),
+-- matrix:server:arsonInterrupted(plate, reason).
 -- =====================================================================
-Matrix.EventsHandler.ActiveFireHandle = nil
-Matrix.EventsHandler.FireIntensity    = 0.0
+local ARSON_MAX_ACTOR_RADIUS = 3.0 -- Matrix.Arson.Config.MaxActorRadius (server) ile ayni
 
-local function _OnArsonAlertDialog(warningText)
+Matrix.EventsHandler.ArsonFireHandles = {}
+
+local function _OnArsonAlertDialog(plate, warningText)
+    if type(plate) ~= 'string' or plate == '' then return end
     if lib and lib.alertDialog then
         local result = lib.alertDialog({
             header   = 'KUNDAKLAMA',
-            content  = tostring(warningText or 'Bu yapıyı ateşe vermek geri alınamaz bir eylemdir.'),
+            content  = tostring(warningText or 'Bu aracı yakmak geri alınamaz bir eylemdir.'),
             centered = true,
             cancel   = true
         })
-        TriggerServerEvent('matrix:server:arson:alertAck', result == 'confirm')
+        TriggerServerEvent('matrix:server:arsonDialogResponse', plate, result == 'confirm')
     end
-    _Log('arsonAlertDialog: gosterildi.')
+    _Log('arsonAlertDialog: plaka=%s gosterildi.', plate)
 end
 _SafeHandler('matrix:client:arsonAlertDialog', _OnArsonAlertDialog)
 
-local function _OnArsonFrictionStart(durationMs)
-    durationMs = tonumber(durationMs) or 8000
-    local completed = false
-    if lib and lib.progressCircle then
-        completed = lib.progressCircle({
-            duration     = durationMs,
-            label        = 'SÜRTÜNME İLE ATEŞLEME HAZIRLANIYOR...',
-            position     = 'bottom',
-            useWhileDead = false,
-            canCancel    = true,
-            disable      = { move = true, car = true, combat = true },
-        })
-    else
-        Wait(durationMs)
-        completed = true
+local function _OnArsonFrictionStart(plate, durationMs)
+    if type(plate) ~= 'string' or plate == '' then return end
+    durationMs = tonumber(durationMs) or 90000
+
+    local vehicle = _ResolveVehicleByPlate(plate)
+    if not vehicle then
+        _Log('arsonFrictionStart: plaka=%s icin arac bulunamadi -- yerel takip yapilamiyor.', plate)
+        return
     end
 
-    if completed then
-        TriggerServerEvent('matrix:server:arson:frictionComplete')
-    else
-        TriggerServerEvent('matrix:server:arson:frictionAbort')
+    local completed, abortedByProximity = _RunProximityGuardedProgress({
+        duration     = durationMs,
+        label        = 'SÜRTÜNME İLE ATEŞLEME HAZIRLANIYOR...',
+        position     = 'bottom',
+        useWhileDead = false,
+        canCancel    = true,
+        disable      = { move = true, car = true, combat = true },
+    }, function() return DoesEntityExist(vehicle) and GetEntityCoords(vehicle) or nil end, ARSON_MAX_ACTOR_RADIUS)
+
+    if abortedByProximity or not completed then
+        TriggerServerEvent('matrix:server:arsonInterrupted', plate,
+            abortedByProximity and 'proximity_break' or 'cancelled')
     end
-    _Log('arsonFrictionStart: tamamlandi=%s', tostring(completed))
+    -- Basarili tamamlanma sunucu tarafinda kendi zamanlayicisiyla
+    -- islenir (ardindan arsonIgnite gelir) -- client "complete" bildirmez.
+    _Log('arsonFrictionStart: plaka=%s tamamlandi=%s aborted=%s', plate, tostring(completed), tostring(abortedByProximity))
 end
 _SafeHandler('matrix:client:arsonFrictionStart', _OnArsonFrictionStart)
 
-local function _OnArsonIgnite(coords)
-    if type(coords) ~= 'table' and type(coords) ~= 'vector3' and type(coords) ~= 'vector4' then return end
+local function _OnArsonIgnite(plate)
+    if type(plate) ~= 'string' or plate == '' then return end
 
-    if Matrix.EventsHandler.ActiveFireHandle then
-        pcall(RemoveScriptFire, Matrix.EventsHandler.ActiveFireHandle)
-        Matrix.EventsHandler.ActiveFireHandle = nil
+    local vehicle = _ResolveVehicleByPlate(plate)
+    if not vehicle then
+        _Log('arsonIgnite: plaka=%s icin arac bulunamadi.', plate)
+        return
     end
 
+    if Matrix.EventsHandler.ArsonFireHandles[plate] then
+        pcall(RemoveScriptFire, Matrix.EventsHandler.ArsonFireHandles[plate])
+        Matrix.EventsHandler.ArsonFireHandles[plate] = nil
+    end
+
+    local coords = GetEntityCoords(vehicle)
     local handle = StartScriptFire(coords.x, coords.y, coords.z, 20, false)
-    Matrix.EventsHandler.ActiveFireHandle = handle
-    _Log('arsonIgnite: (%.1f,%.1f,%.1f) yaninda ates baslatildi (handle=%s).', coords.x, coords.y, coords.z, tostring(handle))
+    Matrix.EventsHandler.ArsonFireHandles[plate] = handle
+    SetVehicleEngineHealth(vehicle, 0.0)
+
+    _Log('arsonIgnite: plaka=%s ates baslatildi (handle=%s).', plate, tostring(handle))
 end
 _SafeHandler('matrix:client:arsonIgnite', _OnArsonIgnite)
 
-local function _OnArsonFireIntensity(intensity)
+local function _OnArsonFireIntensity(plate, intensity)
+    if type(plate) ~= 'string' or plate == '' then return end
     intensity = _Clamp(intensity, 0.0, 1.0)
-    Matrix.EventsHandler.FireIntensity = intensity
 
     if intensity > 0.75 and lib and lib.notify then
-        lib.notify({ title = 'KUNDAKLAMA', description = 'Yangın kontrolden çıkıyor.', type = 'error' })
+        lib.notify({ title = 'KUNDAKLAMA', description = ('%s kontrolden çıkıyor.'):format(plate), type = 'error' })
     end
 
-    _Log('arsonFireIntensity: %.2f', intensity)
+    _Log('arsonFireIntensity: plaka=%s intensity=%.2f', plate, intensity)
 end
 _SafeHandler('matrix:client:arsonFireIntensity', _OnArsonFireIntensity)
 
-local function _OnArsonResolved(outcome)
-    if Matrix.EventsHandler.ActiveFireHandle then
-        pcall(RemoveScriptFire, Matrix.EventsHandler.ActiveFireHandle)
-        Matrix.EventsHandler.ActiveFireHandle = nil
+local function _OnArsonResolved(plate, phase)
+    if type(plate) ~= 'string' or plate == '' then return end
+
+    if Matrix.EventsHandler.ArsonFireHandles[plate] then
+        pcall(RemoveScriptFire, Matrix.EventsHandler.ArsonFireHandles[plate])
+        Matrix.EventsHandler.ArsonFireHandles[plate] = nil
     end
-    Matrix.EventsHandler.FireIntensity = 0.0
+
+    local label = ({
+        sanitized = 'Adli izler tamamen silindi.',
+        salvaged  = 'Araç söndürüldü, izler kurtarılabilir kaldı.',
+        aborted   = 'Kundaklama iptal edildi.',
+    })[tostring(phase)] or ('Sonuç: %s'):format(tostring(phase))
 
     if lib and lib.notify then
-        lib.notify({ title = 'KUNDAKLAMA', description = tostring(outcome or 'Olay sonuçlandı.'), type = 'inform' })
+        lib.notify({ title = 'KUNDAKLAMA', description = label, type = 'inform' })
     end
-    _Log('arsonResolved: %s', tostring(outcome))
+    _Log('arsonResolved: plaka=%s phase=%s', plate, tostring(phase))
 end
 _SafeHandler('matrix:client:arsonResolved', _OnArsonResolved)
 
 -- =====================================================================
--- [9] WORKBENCH NAMLU PROP'U (GROUNDED) —
--- matrix:client:workbench:materializeBarrel / workbench:dematerializeBarrel
--- Config.TrapHouseInterior.Shell zaten server/forensics.lua içinde
--- EnterCoords/ExitCoords/RouterPos alanlarıyla doğrulandı (aynı Shell
--- tablosu); WorkbenchPos aynı tablonun doğal bir sibling alanı olarak
--- varsayıldı. Prop modeli görev tanımından birebir: prop_gun_barrel_01.
+-- [10] WORKBENCH NAMLU PROP'U — matrix:client:workbench:materializeBarrel /
+-- workbench:dematerializeBarrel
+-- server/workbench.lua (BroadcastToBucket -> TriggerClientEvent):
+--   materializeBarrel(trapHouseId, { x, y, z, w })
+--   dematerializeBarrel(trapHouseId)
+-- Konum sunucu tarafindan zaten hesaplanip gonderiliyor -- client
+-- Config'i kendi basina okumuyor.
 -- =====================================================================
 local WORKBENCH_BARREL_MODEL = 'prop_gun_barrel_01'
 local _workbenchBarrelProp = nil
 
-local function _OnMaterializeBarrel()
-    local shell = Config.TrapHouseInterior and Config.TrapHouseInterior.Shell
-    local pos = shell and shell.WorkbenchPos
-    if not pos then
-        _Log('workbench:materializeBarrel: Config.TrapHouseInterior.Shell.WorkbenchPos tanimsiz.')
+local function _OnMaterializeBarrel(trapHouseId, pos)
+    if type(pos) ~= 'table' or not pos.x or not pos.y or not pos.z then
+        _Log('workbench:materializeBarrel: gecersiz pos payload (trap #%s).', tostring(trapHouseId))
         return
     end
 
@@ -605,22 +671,21 @@ local function _OnMaterializeBarrel()
         return
     end
 
-    local heading = tonumber(pos.w) or 0.0
     local prop = CreateObject(hash, pos.x, pos.y, pos.z, true, true, false)
-    SetEntityHeading(prop, heading)
+    SetEntityHeading(prop, tonumber(pos.w) or 0.0)
     FreezeEntityPosition(prop, true)
     SetModelAsNoLongerNeeded(hash)
 
     _workbenchBarrelProp = prop
-    _Log('workbench:materializeBarrel: %s WorkbenchPos (%.2f,%.2f,%.2f) uzerinde sabitlendi.',
-        WORKBENCH_BARREL_MODEL, pos.x, pos.y, pos.z)
+    _Log('workbench:materializeBarrel: trap #%s (%.2f,%.2f,%.2f) uzerinde sabitlendi.',
+        tostring(trapHouseId), pos.x, pos.y, pos.z)
 end
 _SafeHandler('matrix:client:workbench:materializeBarrel', _OnMaterializeBarrel)
 
-local function _OnDematerializeBarrel()
+local function _OnDematerializeBarrel(trapHouseId)
     if _workbenchBarrelProp and DoesEntityExist(_workbenchBarrelProp) then
         DeleteObject(_workbenchBarrelProp)
-        _Log('workbench:dematerializeBarrel: prop temizlendi.')
+        _Log('workbench:dematerializeBarrel: trap #%s prop temizlendi.', tostring(trapHouseId))
     end
     _workbenchBarrelProp = nil
 end
@@ -635,8 +700,8 @@ AddEventHandler('onClientResourceStop', function(resourceName)
     if _workbenchBarrelProp and DoesEntityExist(_workbenchBarrelProp) then
         DeleteObject(_workbenchBarrelProp)
     end
-    if Matrix.EventsHandler.ActiveFireHandle then
-        pcall(RemoveScriptFire, Matrix.EventsHandler.ActiveFireHandle)
+    for _, handle in pairs(Matrix.EventsHandler.ArsonFireHandles or {}) do
+        pcall(RemoveScriptFire, handle)
     end
     for _, blip in pairs(InjectedBotBlips) do
         if DoesBlipExist(blip) then RemoveBlip(blip) end

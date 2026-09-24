@@ -369,6 +369,21 @@ exports('SetHeat', function(trapHouseId, newHeat)
     return Matrix.Bureau.SetHeat(trapHouseId, newHeat)
 end)
 
+-- ★ [VETTING AUDIT FIX] Config.lua, debug_map.lua, hitsquad.lua ve main.lua
+-- Matrix.Bureau.GetHeat'i mevcut bir salt-okunur getter olarak varsayıp
+-- cagiriyordu (hepsi guard'li: 'Matrix.Bureau.GetHeat and ...'), ama bu
+-- dosyada hicbir zaman tanimlanmamisti -- her cagri sessizce 0.0'a
+-- dusuyordu. SetHeat/__SetHeatRaw ile simetrik salt-okunur getter.
+function Matrix.Bureau.GetHeat(trapHouseId)
+    trapHouseId = tonumber(trapHouseId)
+    if not trapHouseId then return 0.0 end
+    return cyberLeakHeatmap[trapHouseId] or 0.0
+end
+
+exports('GetHeat', function(trapHouseId)
+    return Matrix.Bureau.GetHeat(trapHouseId)
+end)
+
 -- ★ [FAZ 2] Hitsquad counter-sting için heatmap zorlama köprüsü.
 -- cyberLeakHeatmap bu dosyada `local`, dışarıdan erişemiyoruz — setter açıyoruz.
 function Matrix.Bureau.__SetHeatRaw(trapHouseId, value)
