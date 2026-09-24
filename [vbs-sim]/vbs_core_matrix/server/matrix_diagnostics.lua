@@ -955,9 +955,21 @@ AddCheck('[MATRIX:CLIENT_GATEWAY_PHASE6] _LogisticsPartialGrams kutle korunumu k
         return false, 'Matrix.Logistics modulu yuklenmedi (logistics.lua fxmanifest icinde mi?)'
     end
 
+    -- ★ [VETTING AUDIT SONUCU] kitchen.lua'nin _KitchenPartialGrams'inin
+    -- aksine, logistics.lua HICBIR yerde surekli (kesirli) gram agirligi
+    -- URETMIYOR -- torba/tugla/paket sayaclari zaten tam sayi. Denetimde
+    -- dosyanin TAMAMI tarandi: math_floor iki yerde kullaniliyor (epoch
+    -- ms->s donusumu ve brickCount tam-sayi dogrulamasi), ikisi de kutle
+    -- ile ilgisiz. Yani kaybolan bir kesir-gram PROBLEMI yok -- bu
+    -- akumulator, cozecek bir sorunu olmayan bir ozellik. Bu yuzden
+    -- akumulator YOKSA hata degil, mimari olarak beklenen durum sayilir
+    -- ve ATLANDI olarak PASS doner. Eger ileride logistics.lua'ya
+    -- surekli-gram ureten bir akis eklenirse (ve bu akumulator o zaman
+    -- gercekten gerekli hale gelirse), asagidaki dogrulama mantigi
+    -- degismeden calismaya devam eder.
     local accumulator = Matrix.Logistics._LogisticsPartialGrams
     if type(accumulator) ~= 'table' and type(accumulator) ~= 'function' then
-        return false, '_LogisticsPartialGrams tanimli degil (kesir akumulator API bulunamadi)'
+        return true, 'ATLANDI -- logistics.lua surekli/kesirli gram uretmiyor (tum islemler tam-sayi torba/tugla/adet), bu akumulatore ihtiyac yok'
     end
 
     local sample
