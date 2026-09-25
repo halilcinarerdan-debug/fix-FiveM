@@ -293,26 +293,37 @@ function Matrix.Workbench.RepairWeapon(src, weaponSlot)
     local shell = Config.TrapHouseInterior and Config.TrapHouseInterior.Shell
     local ok = VerifyInsideTrapHouse(src, shell and shell.WorkbenchPos)
     if not ok then
-        Reply(src, 'Tezgahın yanında değilsiniz (bir trap house içine girip tezgaha yaklaşın).')
+        local msg = 'Tezgahın yanında değilsiniz (bir trap house içine girip tezgaha yaklaşın).'
+        Reply(src, msg)
+        TriggerClientEvent('matrix:client:actionNotify', src, false, msg)
         return false, 'not_at_workbench'
     end
 
     local okSlot, weaponItem = pcall(function() return exports['ox_inventory']:GetSlot(src, weaponSlot) end)
     if not okSlot or type(weaponItem) ~= 'table' or type(weaponItem.name) ~= 'string' then
-        Reply(src, 'Belirtilen slotta silah bulunamadı.')
+        local msg = 'Belirtilen slotta silah bulunamadı.'
+        Reply(src, msg)
+        TriggerClientEvent('matrix:client:actionNotify', src, false, msg)
         return false, 'no_weapon'
     end
 
     if not (Config.BlackMarket and Config.BlackMarket.ReplaceableWeaponItems and Config.BlackMarket.ReplaceableWeaponItems[weaponItem.name]) then
-        Reply(src, 'Bu silah türü için tezgah tamiri desteklenmiyor.')
+        local msg = 'Bu silah türü için tezgah tamiri desteklenmiyor.'
+        Reply(src, msg)
+        TriggerClientEvent('matrix:client:actionNotify', src, false, msg)
         return false, 'not_replaceable'
     end
 
+    -- ★ [YENİ] Eksik bileşen (envanterde yok) artık chat mesajının
+    -- yanında ekranda görünen bir hint olarak da bildiriliyor -- chat
+    -- penceresi kapalıyken sessizce kaybolmasın diye.
     for _, req in ipairs(Config.Workbench.RequiredItems) do
         local countOk, have = pcall(function() return exports['ox_inventory']:Search(src, 'count', req.item) end)
         have = (countOk and tonumber(have)) or 0
         if have < req.count then
-            Reply(src, ('Eksik bileşen: %s (x%d gerekli).'):format(req.label, req.count))
+            local msg = ('Eksik bileşen: %s (x%d gerekli).'):format(req.label, req.count)
+            Reply(src, msg)
+            TriggerClientEvent('matrix:client:actionNotify', src, false, msg)
             return false, 'missing_component'
         end
     end
@@ -320,7 +331,9 @@ function Matrix.Workbench.RepairWeapon(src, weaponSlot)
     for _, req in ipairs(Config.Workbench.RequiredItems) do
         local removeOk = pcall(function() return exports['ox_inventory']:RemoveItem(src, req.item, req.count) end)
         if not removeOk then
-            Reply(src, 'Bileşenler tüketilirken bir hata oluştu.')
+            local msg = 'Bileşenler tüketilirken bir hata oluştu.'
+            Reply(src, msg)
+            TriggerClientEvent('matrix:client:actionNotify', src, false, msg)
             return false, 'consume_failed'
         end
     end
@@ -352,7 +365,9 @@ function Matrix.Workbench.RepairWeapon(src, weaponSlot)
     })
 
     TriggerClientEvent('matrix:client:weaponJamStateChanged', src, weaponSlot, false)
-    Reply(src, ('%s tezgahta tamir edildi. Büro balistik arşivi tamamen kör edildi.'):format(weaponItem.label or weaponItem.name))
+    local successMsg = ('%s tezgahta tamir edildi. Büro balistik arşivi tamamen kör edildi.'):format(weaponItem.label or weaponItem.name)
+    Reply(src, successMsg)
+    TriggerClientEvent('matrix:client:actionNotify', src, true, successMsg)
     Matrix.Log('WORKBENCH', '[TEZGAH TAMİRİ] src=%d silah=%s eski-seri=%s yeni-seri=%s',
         src, weaponItem.name, tostring(oldSerial), newSerial)
     return true

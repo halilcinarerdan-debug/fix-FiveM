@@ -193,12 +193,16 @@ RegisterNetEvent('matrix:server:doorReinforcement:install', function(trapHouseId
             player_not_found            = 'Oyuncu profili cozulemedi.',
             charge_failed               = 'Odeme basarisiz.'
         }
-        Reply(src, messages[resultOrReason] or ('Tahkimat basarisiz: %s'):format(tostring(resultOrReason)))
+        local failMsg = messages[resultOrReason] or ('Tahkimat basarisiz: %s'):format(tostring(resultOrReason))
+        Reply(src, failMsg)
+        TriggerClientEvent('matrix:client:actionNotify', src, false, failMsg)
         return
     end
 
 
-    Reply(src, ('%s monte edildi. Kapı kırılma süresi artık daha uzun.'):format(resultOrReason.label))
+    local successMsg = ('%s monte edildi. Kapı kırılma süresi artık daha uzun.'):format(resultOrReason.label)
+    Reply(src, successMsg)
+    TriggerClientEvent('matrix:client:actionNotify', src, true, successMsg)
 end)
 
 
