@@ -212,6 +212,31 @@ lib.callback.register('matrix:callback:getDistrictHubsReport', function(src)
     return lines
 end)
 
+-- ★ [YENİ] client/hud.lua'nın her-zaman-açık HUD katmanı için ham hub
+-- listesi (yukarıdaki callback SADECE F10 raporu için düz metin üretir).
+-- Koordinatları client'a gönderiyoruz ki mesafe her karede yerel olarak
+-- hesaplansın -- bu her tick için yeni bir sunucu round-trip'i gerektirmez.
+RegisterNetEvent('matrix:server:requestDistrictHubTelemetry', function()
+    local src = source
+    if type(src) ~= 'number' or src <= 0 then return end
+
+    local hubs = {}
+    for id, hub in pairs(Hubs) do
+        hubs[#hubs + 1] = {
+            id            = id,
+            label         = hub.label,
+            trap_house_id = hub.trap_house_id,
+            x             = hub.coords.x,
+            y             = hub.coords.y,
+            z             = hub.coords.z,
+            active        = hub.active,
+            locked        = hub.locked,
+        }
+    end
+
+    TriggerClientEvent('matrix:client:districtHubTelemetry', src, { hubs = hubs })
+end)
+
 -- =====================================================================
 -- ★ [OTONOM ALT HUCRE BOLUNMESI] FragmentTerritory (SLIME MODEL)
 -- Bir otonom cete lideri (bot.role=='Leader') 'deceased' olarak dustugunde

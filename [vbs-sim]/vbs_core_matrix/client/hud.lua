@@ -94,6 +94,11 @@ local hydraulicTelemetry = {
     stash_cap_kg            = HYDRAULIC_STASH_CAP_KG,
 }
 
+-- ★ [YENİ] Toplu Satış Hub (District Hub) HUD telemetrisi
+local districtHubTelemetry = {
+    hubs = {}, -- { { id, label, trap_house_id, coords=vector3, active, locked }, ... }
+}
+
 local function DrawMonoLine(x, y, text, r, g, b, scale)
     SetTextFont(4)
     SetTextProportional(1)
@@ -320,12 +325,32 @@ RegisterNetEvent('matrix:client:hydraulicTelemetry', function(payload)
     hydraulicTelemetry.stash_cap_kg            = tonumber(payload.stash_cap_kg) or HYDRAULIC_STASH_CAP_KG
 end)
 
+-- ★ [YENİ] Toplu Satış Hub telemetri alıcısı
+RegisterNetEvent('matrix:client:districtHubTelemetry', function(payload)
+    if type(payload) ~= 'table' or type(payload.hubs) ~= 'table' then return end
+    local hubs = {}
+    for _, h in ipairs(payload.hubs) do
+        if type(h) == 'table' and type(h.x) == 'number' and type(h.y) == 'number' and type(h.z) == 'number' then
+            hubs[#hubs + 1] = {
+                id            = h.id,
+                label         = tostring(h.label or ('Hub #%s'):format(tostring(h.id))),
+                trap_house_id = h.trap_house_id,
+                coords        = vector3(h.x, h.y, h.z),
+                active        = h.active and true or false,
+                locked        = h.locked and true or false,
+            }
+        end
+    end
+    districtHubTelemetry.hubs = hubs
+end)
+
 -- ★ PHASE6-STEP3 — Telemetry pull thread (event-driven, 2s heartbeat while HUD is visible)
 CreateThread(function()
     while true do
         Wait(2000)
         if hudActive then
             TriggerServerEvent('matrix:server:requestHydraulicTelemetry')
+            TriggerServerEvent('matrix:server:requestDistrictHubTelemetry')
         end
     end
 end)
@@ -384,6 +409,37 @@ local function DrawHydraulicTelemetryBlock(y)
     return y
 end
 
+-- ★ [YENİ] Toplu Satış Hub durum satırı — en yakın aktif hub'ı mesafesiyle
+-- gösterir + kaç aktif/toplam hub olduğunu özetler.
+local function DrawDistrictHubBlock(y)
+    local hubs = districtHubTelemetry.hubs
+    if #hubs == 0 then return y end
+
+    local myCoords = GetEntityCoords(PlayerPedId())
+    local activeCount, totalCount = 0, #hubs
+    local nearestLabel, nearestDist = nil, nil
+
+    for _, hub in ipairs(hubs) do
+        if hub.active then
+            activeCount = activeCount + 1
+            local dist = #(myCoords - hub.coords)
+            if not nearestDist or dist < nearestDist then
+                nearestDist  = dist
+                nearestLabel = hub.label
+            end
+        end
+    end
+
+    local summary = ('[TOPLU SATIŞ] Aktif: %d/%d'):format(activeCount, totalCount)
+    if nearestLabel then
+        summary = summary .. (' | En Yakın: %s (%.0fm)'):format(nearestLabel, nearestDist)
+    end
+
+    DrawMonoLine(HUD_BASE_X, y, summary, COLOR_VALUE[1], COLOR_VALUE[2], COLOR_VALUE[3], HUD_TEXT_SCALE)
+    y = y + HUD_LINE_HEIGHT
+    return y
+end
+
 -- ★ [R1] ANA ÇİZİM DÖNGÜSÜ — per-frame render
 CreateThread(function()
     while true do
@@ -396,6 +452,7 @@ CreateThread(function()
 
             -- ★ PHASE6-STEP3 — Live industrial telemetry layer (always on top)
             y = DrawHydraulicTelemetryBlock(y)
+            y = DrawDistrictHubBlock(y)
 
             DrawMonoLine(HUD_BASE_X, y, HUD_FRAME_TEXT, COLOR_DIM[1], COLOR_DIM[2], COLOR_DIM[3], HUD_TEXT_SCALE)
             y = y + HUD_LINE_HEIGHT

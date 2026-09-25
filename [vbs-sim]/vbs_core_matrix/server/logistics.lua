@@ -3490,6 +3490,70 @@ RegisterCommand('presdurum', function(src)
         active, hp.CyclesRequired))
 end, false)
 
+-- ★ [FIX] client/hud.lua kalici olarak 'matrix:server:requestHydraulicTelemetry'
+-- gonderiyordu ama bu event HICBIR YERDE islenmiyordu -- tum HUD hidrolik
+-- pres/botanik/stash bloğu daima ilk (bos) degerlerde donuk kaliyordu.
+-- Oyuncunun mevcut trap house'una gore GERCEK veriyi toplayip geri yollar:
+--   - pres durumu: once RAM'deki aktif oturum (Matrix.Logistics.HydraulicPress
+--     .ByHouseId), yoksa DB'deki son persisted brick_press_status.
+--   - botanik buyume: Matrix.Kitchen.GetBotanyCabinet(...).growth_progress.
+--   - stash doluluk: Matrix.Market.CanDepositToStash(id, 0) -> mevcut gram.
+RegisterNetEvent('matrix:server:requestHydraulicTelemetry', function()
+    local src = source
+    if type(src) ~= 'number' or src <= 0 then return end
+
+    local trapHouseId = Matrix.TrapHouseInterior and Matrix.TrapHouseInterior.GetPlayerTrapHouse
+        and Matrix.TrapHouseInterior.GetPlayerTrapHouse(src)
+
+    local payload = {
+        brick_press_status      = 'idle',
+        total_compressed_bricks = 0,
+        botany_growth_percent   = 0.0,
+        stash_filled_kg         = 0.0,
+        stash_cap_kg            = 150.0
+    }
+
+    if trapHouseId then
+        local hp      = Matrix.Logistics.HydraulicPress
+        local session = hp and hp.ByHouseId and hp.ByHouseId[trapHouseId]
+        if session then
+            payload.brick_press_status = session.status or 'compressing'
+        end
+
+        local ok, row = pcall(function()
+            return MySQL.single.await(
+                'SELECT brick_press_status, total_compressed_bricks FROM matrix_trap_houses WHERE id = ?',
+                { trapHouseId })
+        end)
+        if ok and row then
+            if not session then payload.brick_press_status = row.brick_press_status or 'idle' end
+            payload.total_compressed_bricks = tonumber(row.total_compressed_bricks) or 0
+        end
+
+        if Matrix.Kitchen and Matrix.Kitchen.GetBotanyCabinet then
+            local cabinet = Matrix.Kitchen.GetBotanyCabinet(trapHouseId)
+            if cabinet then
+                payload.botany_growth_percent = (tonumber(cabinet.growth_progress) or 0.0) * 100.0
+            end
+        end
+
+        if Matrix.Market and Matrix.Market.CanDepositToStash then
+            local okDep, currentGrams = pcall(Matrix.Market.CanDepositToStash, trapHouseId, 0)
+            if okDep and type(currentGrams) == 'number' then
+                payload.stash_filled_kg = currentGrams / 1000.0
+            end
+        end
+        local okCap, cap = pcall(function()
+            return exports[GetCurrentResourceName()]:GetStashMassCapKg()
+        end)
+        if okCap and type(cap) == 'number' and cap > 0 then
+            payload.stash_cap_kg = cap
+        end
+    end
+
+    TriggerClientEvent('matrix:client:hydraulicTelemetry', src, payload)
+end)
+
 
 RegisterCommand('presiptal', function(src, args)
     if not HasCommandAuthority(src) then
