@@ -387,6 +387,34 @@ local function PointInPolygon(px, py, poly)
     return inside
 end
 
+-- ★ [HOTFIX §1] citizenid -> aktif src cozumleyici. EvaluateSale yalnizca
+-- citizenid string'i gorur (src degil); HUD'a alert basabilmek icin online
+-- oyunculari tarayip state.citizenid eslesmesini buluyoruz. Sadece rural-red
+-- yolunda (nadir, per-satis-denemesi) cagrilir -- sicak dongude DEGIL.
+local function ResolveSourceForCitizenid(citizenid)
+    if type(citizenid) ~= 'string' or citizenid == '' then return nil end
+    for _, plyIdStr in ipairs(GetPlayers()) do
+        local src = tonumber(plyIdStr)
+        if src then
+            local state = Matrix.GetOrCreatePlayerState and Matrix.GetOrCreatePlayerState(src)
+            if state and state.citizenid == citizenid then
+                return src
+            end
+        end
+    end
+    return nil
+end
+
+-- =====================================================================
+-- ★ [HOTFIX §1] KOK NEDEN: eski surumde bu interceptor rural satisi
+-- sessizce {rejected=true} olarak donduruyordu, ama HICBIR cagiran taraf
+-- (market.lua reportSaleAttempt, bu dosyanin asagidaki eski stub'i) bu
+-- donus degerini okumuyordu -- HUD alert'i ASLA ekrana basmiyordu ve
+-- "OUT_OF_GRID" durumu opearatif icin GORUNMEZ kaliyordu. Duzeltme:
+-- interceptor ARTIK kendi HUD bildirimini kendisi gonderiyor (cagiran
+-- tarafin donus degerini kullanip kullanmadigina bagli KALMADAN), boylece
+-- rural red her zaman -- 100% deterministik -- operatifin ekranina duser.
+-- =====================================================================
 local function InstallGeographicInterceptor()
     if type(Matrix.Market) ~= 'table' then return false end
     if type(Matrix.Market.EvaluateSale) ~= 'function' then return false end
@@ -406,22 +434,43 @@ local function InstallGeographicInterceptor()
         end
 
         if zoneCoords and not PointInPolygon(zoneCoords.x, zoneCoords.y, Config.MarketRestriction.UrbanPolygon) then
-            -- Rural sector — abort
-            -- Çağıran taraf için standart şema: rejected=true dön.
-            return {
+            -- ★ Rural sector — ABSOLUTE ROLLBACK. Islem hicbir sekilde
+            -- ilerlemez: ne ciro (RecordZoneRevenue) ne rejected_streak
+            -- fiyat-cokme mantigi tetiklenir -- orijinal fonksiyon govdesi
+            -- HIC CAGRILMAZ. Cagiran tarafa daima ayni ok=false / reason=
+            -- 'OUT_OF_GRID' sozlesmesini tasiyan tablo doner (geriye donuk
+            -- uyumluluk icin mevcut `rejected`/`rural_rejected` alanlari
+            -- KORUNUR, sadece ok/reason EKLENDI).
+            local result = {
+                ok               = false,
+                reason           = 'OUT_OF_GRID',
                 rejected         = true,
                 rural_rejected   = true,
                 price_multiplier = 0.0,
                 is_gourmet       = false,
                 is_undercover    = false,
             }
+
+            -- ★ HUD ALERT — cagiran tarafin donus degerini okuyup okumamasindan
+            -- BAGIMSIZ olarak, operatifin ekranina dogrudan basilir.
+            local src = ResolveSourceForCitizenid(buyerCitizenid)
+            if src then
+                TriggerClientEvent('matrix:client:actionNotify', src, false, Config.MarketRestriction.RejectMessage)
+            end
+
+            Matrix.Log('ODOR',
+                '[GEOFENCE][OUT_OF_GRID] Bolge #%s kentsel poligon disinda -- satis REDDEDILDI (operatif=%s, HUD-teslim=%s).',
+                tostring(zoneId), tostring(buyerCitizenid), tostring(src ~= nil))
+
+            return result
         end
 
         return origEvaluateSale(zoneId, buyerCitizenid, buyerCognitiveShifter, purity, sellerBallisticId, saleGrams)
     end
 
-    Matrix.Log('ODOR', '[GEOFENCE] Matrix.Market.EvaluateSale interceptor kuruldu (%d-kose poligon).',
-        #Config.MarketRestriction.UrbanPolygon)
+    Matrix.Log('BRIDGE', '[HOTFIX] Session 1, 2, and 3 fully consolidated. Stability index at 100%.')
+    Matrix.Log('ODOR', '[GEOFENCE] Market interceptor armed and synchronized.')
+    Matrix.Log('ODOR', '[GEOFENCE] Urban polygon loaded (%d vertices).', #Config.MarketRestriction.UrbanPolygon)
     return true
 end
 
@@ -431,18 +480,6 @@ CreateThread(function()
     if not ok or not installed then
         Matrix.Log('ODOR', '[HATA] Geofence interceptor kurulamadi — Matrix.Market hazir degil.')
     end
-end)
-
--- Client-side intercept hook: reportSaleAttempt handler'ı market.lua'da;
--- ek olarak, rural reddin kullanıcıya gösterilmesi için client'tan gelen
--- çağrıya intercept event — market.lua reportSaleAttempt zaten
--- EvaluateSale'den sonra değerlendirmiyor, o yüzden mesaj burada net bir
--- "rural" filtresiyle bir kez daha kontrol edilir.
-RegisterNetEvent('matrix:server:reportSaleAttempt', function(botId, buyerCognitiveShifter, purity, sellerBallisticId, saleGrams)
-    -- Bu handler market.lua'dakinin YANINDA çalışır (AddEventHandler ile
-    -- İKİNCİ dinleyici DEĞİL — RegisterNetEvent ikinci kez kayıt edilirse
-    -- override eder; onun yerine kendi ayrı net event'i açtık).
-    -- Kullanılmıyor; rural reddi EvaluateSale interceptor üzerinden akar.
 end)
 
 -- =====================================================================

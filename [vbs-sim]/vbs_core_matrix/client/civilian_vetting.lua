@@ -113,6 +113,11 @@ local function PruneTracked()
         if not DoesEntityExist(ped) then
             toRemove[#toRemove + 1] = ped
         elseif IsPedDeadOrDying(ped, true) or IsEntityDead(ped) then
+            -- ★ [HOTFIX §3] Ped olu/dying oldugunda keep-task kilidi
+            -- birakilmazsa, oyun tarafindan geri kullanilan ped handle'i
+            -- kalici olarak ambient AI'dan izole kalirdi. Entity var oldugu
+            -- surece (ikinci dal) kilidi acikca serbest birak.
+            pcall(SetPedKeepTask, ped, false)
             toRemove[#toRemove + 1] = ped
         end
     end
@@ -164,6 +169,17 @@ CreateThread(function()
                         -- State bag
                         MarkReportedOdor(ped, true)
 
+                        -- ★ [HOTFIX §3] ATOMIK SEKANS OVERRIDE — varsayilan
+                        -- GTA ambient wander/idle node'lari TaskPlayAnim'i
+                        -- her an sessizce iptal edip pedi karakterinden
+                        -- cikarabiliyordu (anim hic baslamadan atlaniyordu
+                        -- veya yarida kesiliyordu). Once nativ motorun arka
+                        -- plan gorevlerini tamamen sil, sonra dis ambient
+                        -- script node'larinin bizim gorevimizi override
+                        -- ETMESINI KEEP-TASK ile yapisal olarak imkansiz kil.
+                        ClearPedTasksImmediately(ped)
+                        SetPedKeepTask(ped, true)
+
                         -- Disgust anim
                         if EnsureAnimDict(ANIM_DICT) then
                             TaskPlayAnim(ped, ANIM_DICT, ANIM_CLIP,
@@ -188,7 +204,9 @@ CreateThread(function()
 
             -- İzlenen pedlerin strategik pencere kontrolü
             for ped, entry in pairs(TrackedPeds) do
-                if DoesEntityExist(ped) and not IsEntityDead(ped) then
+                -- ★ [HOTFIX §3] IsPedDeadOrDying — IsEntityDead'den daha
+                -- kapsamli (ragdoll/olmekte-olan ara durumlari da yakalar).
+                if DoesEntityExist(ped) and not IsPedDeadOrDying(ped, true) then
                     local elapsed = now - entry.detected_at
 
                     -- Ped hâlâ alanın içinde mi?
@@ -196,8 +214,14 @@ CreateThread(function()
                     local stillIn   = IsInAnyOdorField(pedCoords, 1.5)
 
                     if stillIn and not entry.dispatched and elapsed >= INTERVENE_DELAY_MS then
-                        -- 5 saniyelik stratejik pencere geçti, hâlâ aktive
+                        -- 5 saniyelik stratejik pencere geçti, hedef hâlâ
+                        -- canlı/aktif -- disgust anim kilidini temiz bir
+                        -- şekilde bırak (SetPedKeepTask false) ve telefon
+                        -- senaryosuna geçmeden önce görev kuyruğunu temizle.
                         entry.dispatched = true
+
+                        ClearPedTasks(ped)
+                        SetPedKeepTask(ped, false)
 
                         -- Telefon çek
                         TaskStartScenarioInPlace(ped, PHONE_SCENARIO, 0, true)
